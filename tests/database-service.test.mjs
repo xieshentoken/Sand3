@@ -22,6 +22,8 @@ try {
   assert.equal(imported.cards, 1); assert.equal(imported.indexed, 1);
   assert.equal(database.stats().phases, 1);
   assert.equal(database.query({ statuses: ["P"], indexedOnly: true, observedD: [2], dTolerances: [0.01], elementFilter: { required: ["Fe"], excluded: [] } }).length, 1);
+  assert.equal(database.query({ statuses: ["P"], indexedOnly: true, observedD: [2, 9], dTolerances: [0.01, 0.01] }).length, 0);
+  assert.equal(database.query({ statuses: ["P"], indexedOnly: true, observedD: [2, 9], dTolerances: [0.01, 0.01], minObservedMatches: 1 }).length, 1);
   assert.equal(database.searchSummaries({ required: ["Fe"], excluded: [], statuses: ["P"] }).length, 1);
   assert.equal(database.searchSummaries({ required: ["H", "Fe"], logic: "and", statuses: ["P"] }).length, 0);
   assert.equal(database.searchSummaries({ required: ["H", "Fe"], logic: "or", statuses: ["P"] }).length, 1);

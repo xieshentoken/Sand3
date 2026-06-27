@@ -1,17 +1,22 @@
 import assert from "node:assert/strict";
 import {
   combineTolerance,
+  detectRings,
   detectScaleBar,
   detectPeaks,
   dSpacing,
   elementsFromFormula,
   fftMagnitude,
   findParallelograms,
+  hkilToHkl,
   matchCard,
+  matchRings,
   measurementFromVectors,
+  normalizePlaneIndex,
   planeAngle,
   phasePassesElementFilter,
   refineInversionCenter,
+  scoreGlobalPeakFit,
   snapToBrightPoint,
   zoneAxis,
 } from "../core.js";
@@ -25,6 +30,9 @@ assert.deepEqual(elementsFromFormula("Ca(OH)2"), ["Ca", "H", "O"]);
 assert.equal(phasePassesElementFilter(["O", "Fe"], { required: ["H", "O"], logic: "and" }), false);
 assert.equal(phasePassesElementFilter(["O", "Fe"], { required: ["H", "O"], logic: "or" }), true);
 assert.ok(Math.abs(combineTolerance(0.1, 0.03, 2) - Math.hypot(0.1, 0.06)) < 1e-12);
+assert.deepEqual(hkilToHkl(1, 0, -1, 2), [1, 0, 2]);
+assert.equal(hkilToHkl(1, 0, 0, 2), null);
+assert.deepEqual(normalizePlaneIndex({ h: 1, k: 0, i: -1, l: 2 }, "Hexagonal"), [1, 0, 2]);
 
 const scaleImage = new Float32Array(160 * 100).fill(0.15);
 for (let x = 92; x <= 142; x += 1) scaleImage[84 * 160 + x] = 1;
@@ -100,5 +108,65 @@ assert.ok(matchCard(compactCard, { ...measurement, dSigma: [0, 0, 0], phiSigma: 
   distanceTolerance: 0.01,
   angleTolerance: 0.1,
 }).length > 0);
+
+const hexCell = { a: 2.5, b: 2.5, c: 4, alpha: 90, beta: 90, gamma: 120 };
+const hexMeasurement = {
+  d1: dSpacing([1, 0, 0], hexCell),
+  d2: dSpacing([1, 1, 0], hexCell),
+  d3: dSpacing([0, 1, 0], hexCell),
+  phi12: planeAngle([1, 0, 0], [1, 1, 0], hexCell),
+  phi23: planeAngle([1, 1, 0], [0, 1, 0], hexCell),
+  dSigma: [0, 0, 0],
+  phiSigma: [0, 0],
+};
+const hexCard = {
+  id: "hex-hkil",
+  name: "hex hkil fixture",
+  formula: "X",
+  crystalSystem: "Hexagonal",
+  cell: hexCell,
+  reflections: [
+    { d: hexMeasurement.d1, h: 1, k: 0, i: -1, l: 0 },
+    { d: hexMeasurement.d2, h: 1, k: 1, i: -2, l: 0 },
+    { d: hexMeasurement.d3, h: 0, k: 1, i: -1, l: 0 },
+  ],
+};
+assert.ok(matchCard(hexCard, hexMeasurement, { distanceTolerance: 0.001, angleTolerance: 0.001 }).length > 0);
+
+const globalScore = scoreGlobalPeakFit(results[0], card, [
+  { x: 60, y: 50, value: 1 },
+  { x: 50, y: 60, value: 1 },
+  { x: 60, y: 60, value: 0.9 },
+  { x: 70, y: 50, value: 0.8 },
+], { x: 50, y: 50 }, 0.025, {
+  basisVectors: [{ x: 10, y: 0 }, { x: 0, y: 10 }],
+  distanceTolerance: 0.01,
+});
+assert.ok(globalScore && globalScore.total >= 3);
+assert.equal(globalScore.matched, globalScore.total);
+
+const ringSize = 120;
+const ringImage = new Float32Array(ringSize * ringSize).fill(0.04);
+const ringCenter = { x: 60, y: 60 };
+for (let y = 0; y < ringSize; y += 1) for (let x = 0; x < ringSize; x += 1) {
+  const r = Math.hypot(x - ringCenter.x, y - ringCenter.y);
+  if (Math.abs(r - 20) < 1.2 || Math.abs(r - 35) < 1.2) ringImage[y * ringSize + x] = 1;
+}
+const rings = detectRings(ringImage, ringSize, ringSize, ringCenter, 0.025, { sigmaThreshold: 0.6, minRadius: 8, maxRings: 4 });
+assert.ok(rings.length >= 2);
+assert.ok(Math.abs(rings[0].d - 2) < 0.15);
+assert.ok(Math.abs(rings[1].d - (1 / (35 * 0.025))) < 0.15);
+const ringCard = {
+  id: "ring-card",
+  name: "ring fixture",
+  formula: "X",
+  crystalSystem: "Cubic",
+  cell: cubic,
+  reflections: [
+    { d: rings[0].d, h: 2, k: 0, l: 0 },
+    { d: rings[1].d, h: 3, k: 0, l: 0 },
+  ],
+};
+assert.ok(matchRings(ringCard, rings.slice(0, 2), { distanceTolerance: 0.05, minRings: 2 }).length === 1);
 
 console.log("core tests passed");
