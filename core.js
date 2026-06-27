@@ -153,6 +153,40 @@ function uniqueHkls(values) {
   return [...map.values()];
 }
 
+function integerIndex(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number === 32767) return null;
+  const rounded = Math.round(number);
+  return Math.abs(number - rounded) < 1e-6 ? rounded : number;
+}
+
+function isHexMillerBravaisSystem(crystalSystem = "Unknown") {
+  const system = String(crystalSystem).toLowerCase();
+  return system.includes("hexagonal") || system.includes("trigonal") || system.includes("rhombohedral");
+}
+
+export function hkilToHkl(h, k, i, l, options = {}) {
+  const values = [h, k, i, l].map(integerIndex);
+  if (values.some((value) => value === null)) return null;
+  const tolerance = Number(options.tolerance ?? 1e-6);
+  if (Math.abs(values[0] + values[1] + values[2]) > tolerance) return null;
+  return [values[0], values[1], values[3]];
+}
+
+export function normalizePlaneIndex(reflection, crystalSystem = "Unknown") {
+  if (!reflection) return null;
+  if (Array.isArray(reflection)) {
+    if (reflection.length >= 4 && isHexMillerBravaisSystem(crystalSystem)) return hkilToHkl(reflection[0], reflection[1], reflection[2], reflection[3]);
+    const hkl = reflection.slice(0, 3).map(integerIndex);
+    return hkl.some((value) => value === null) ? null : hkl;
+  }
+  if (Object.hasOwn(reflection, "i") && isHexMillerBravaisSystem(crystalSystem)) {
+    return hkilToHkl(reflection.h, reflection.k, reflection.i, reflection.l);
+  }
+  const hkl = [reflection.h, reflection.k, reflection.l].map(integerIndex);
+  return hkl.some((value) => value === null) ? null : hkl;
+}
+
 /** Preserve the point-symmetry expansion used by the original Sand matcher. */
 export function symmetryEquivalents(hklInput, crystalSystem = "Unknown") {
   const [h, k, l] = hklInput.map((x) => Math.round(Number(x)));
@@ -222,6 +256,32 @@ function divisibleHkl(hkl, order) {
   return hkl.every((value) => Math.round(value) % n === 0);
 }
 
+function reflectionCount(card) {
+  if (Array.isArray(card?.reflections)) return card.reflections.length;
+  if (card?.dValues && card?.hkls) return card.dValues.length;
+  return 0;
+}
+
+function reflectionAt(card, index) {
+  if (Array.isArray(card.reflections)) return card.reflections[index];
+  return {
+    d: card.dValues[index],
+    h: card.hkls[index * 3],
+    k: card.hkls[index * 3 + 1],
+    l: card.hkls[index * 3 + 2],
+    intensity: card.intensities?.[index],
+  };
+}
+
+function normalizedReflectionAt(card, index, crystalSystem) {
+  const reflection = reflectionAt(card, index);
+  const hkl = normalizePlaneIndex(reflection, crystalSystem);
+  if (!hkl) return null;
+  const d = Number.isFinite(Number(reflection.d)) ? Number(reflection.d) : dSpacing(hkl, card.cell);
+  if (!Number.isFinite(d) || d <= 0) return null;
+  return { ...reflection, d, hkl };
+}
+
 /**
  * Match one indexed card against the fixed three-plane parallelogram model.
  * The hard conditions are preserved: g1 + g3 = g2 and all d/angle residuals
@@ -247,19 +307,12 @@ export function matchCard(card, measurement, userOptions = {}) {
   const candidates = observedD.map((dObs, index) => {
     const tol = toleranceFor(measurement, index, "d", options);
     const map = new Map();
-    const reflectionCount = Array.isArray(card.reflections) ? card.reflections.length : card.dValues.length;
-    for (let reflectionIndex = 0; reflectionIndex < reflectionCount; reflectionIndex += 1) {
-      const reflection = Array.isArray(card.reflections) ? card.reflections[reflectionIndex] : {
-        d: card.dValues[reflectionIndex],
-        h: card.hkls[reflectionIndex * 3],
-        k: card.hkls[reflectionIndex * 3 + 1],
-        l: card.hkls[reflectionIndex * 3 + 2],
-      };
-      const base = [reflection.h, reflection.k, reflection.l].map(Number);
-      if (base.some((x) => x === 32767)) continue;
-      if (base.some((x) => !Number.isFinite(x))) continue;
-      const recordedD = Number.isFinite(Number(reflection.d)) ? Number(reflection.d) : dSpacing(base, card.cell);
-      if (Math.abs(recordedD - dObs) > tol) continue;
+    const count = reflectionCount(card);
+    for (let reflectionIndex = 0; reflectionIndex < count; reflectionIndex += 1) {
+      const reflection = normalizedReflectionAt(card, reflectionIndex, crystalSystem);
+      if (!reflection) continue;
+      const base = reflection.hkl;
+      if (Math.abs(reflection.d - dObs) > tol) continue;
       for (const hkl of symmetryEquivalents(base, crystalSystem)) {
         if (divisibleHkl(hkl, options.diffractionOrder)) map.set(keyHkl(hkl), hkl);
       }
@@ -311,6 +364,171 @@ export function matchCard(card, measurement, userOptions = {}) {
     if (!previous || result.score < previous.score) dedup.set(key, result);
   }
   return [...dedup.values()].sort((a, b) => a.score - b.score).slice(0, options.maxResults);
+}
+
+function solveBasisCoefficients(basis1, basis3, vector) {
+  const det = basis1.x * basis3.y - basis1.y * basis3.x;
+  if (Math.abs(det) < EPS) return null;
+  return {
+    a: (vector.x * basis3.y - vector.y * basis3.x) / det,
+    b: (basis1.x * vector.y - basis1.y * vector.x) / det,
+  };
+}
+
+export function scoreGlobalPeakFit(result, card, peaks, center, reciprocalScale, options = {}) {
+  if (!result?.hkl1 || !result?.hkl3 || !card?.cell || !Array.isArray(peaks) || !center) return null;
+  const scale = Number(reciprocalScale);
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  const basisVectors = options.basisVectors || [];
+  const basis1 = basisVectors[0]; const basis3 = basisVectors[1];
+  if (!basis1 || !basis3) return null;
+  const coefficientTolerance = Number(options.coefficientTolerance ?? 0.18);
+  const maxOrder = Math.max(1, Math.round(options.maxOrder ?? 5));
+  const minRadius = Number(options.minRadius ?? 6);
+  const dTolerance = Math.max(EPS, Number(options.distanceTolerance ?? 0.1));
+  const byCoefficient = new Map();
+  for (const peak of peaks) {
+    const vector = { x: peak.x - center.x, y: peak.y - center.y };
+    const radius = Math.hypot(vector.x, vector.y);
+    if (radius < minRadius) continue;
+    const coeff = solveBasisCoefficients(basis1, basis3, vector);
+    if (!coeff) continue;
+    const a = Math.round(coeff.a); const b = Math.round(coeff.b);
+    if ((a === 0 && b === 0) || Math.abs(a) > maxOrder || Math.abs(b) > maxOrder) continue;
+    if (Math.hypot(coeff.a - a, coeff.b - b) > coefficientTolerance) continue;
+    const dObserved = 1 / (radius * scale);
+    const key = `${a},${b}`;
+    const previous = byCoefficient.get(key);
+    if (!previous || (peak.value || 0) > (previous.value || 0)) byCoefficient.set(key, { a, b, dObserved, radius, value: peak.value || 0 });
+  }
+  const observations = [...byCoefficient.values()]
+    .sort((a, b) => (b.value || 0) - (a.value || 0))
+    .slice(0, Math.max(3, Number(options.maxPeaks ?? 36)));
+  if (observations.length < 2) return null;
+  const matches = [];
+  for (const observation of observations) {
+    const hkl = result.hkl1.map((value, index) => observation.a * value + observation.b * result.hkl3[index]);
+    if (hkl.every((value) => Math.round(value) === 0)) continue;
+    const dCalculated = dSpacing(hkl, card.cell);
+    if (!Number.isFinite(dCalculated) || dCalculated <= 0) continue;
+    const residual = Math.abs(dCalculated - observation.dObserved);
+    matches.push({ ...observation, hkl: hkl.map(Math.round), dCalculated, residual, normalizedResidual: residual / dTolerance });
+  }
+  if (matches.length < 2) return null;
+  const matched = matches.filter((item) => item.residual <= dTolerance).length;
+  const residualScore = matches.reduce((sum, item) => sum + Math.min(9, item.normalizedResidual ** 2), 0) / matches.length;
+  const coveragePenalty = (matches.length - matched) / Math.max(1, matches.length);
+  return {
+    score: residualScore + coveragePenalty,
+    matched,
+    total: matches.length,
+    meanResidual: matches.reduce((sum, item) => sum + item.residual, 0) / matches.length,
+    matches,
+  };
+}
+
+export function detectRings(values, width, height, center, reciprocalScale, options = {}) {
+  if (!values || !center) return [];
+  const scale = Number(reciprocalScale);
+  if (!Number.isFinite(scale) || scale <= 0) return [];
+  const maxRadius = Math.floor(Math.min(center.x, center.y, width - 1 - center.x, height - 1 - center.y, options.maxRadius ?? Infinity)) - 2;
+  const minRadius = Math.max(4, Math.round(options.minRadius ?? 10));
+  if (maxRadius <= minRadius + 4) return [];
+  const sums = new Float64Array(maxRadius + 1);
+  const counts = new Uint32Array(maxRadius + 1);
+  const step = Math.max(1, Math.floor(Math.max(width, height) / 900));
+  for (let y = 0; y < height; y += step) for (let x = 0; x < width; x += step) {
+    const radius = Math.round(Math.hypot(x - center.x, y - center.y));
+    if (radius >= minRadius && radius <= maxRadius) { sums[radius] += values[y * width + x]; counts[radius] += 1; }
+  }
+  const profile = new Float64Array(maxRadius + 1);
+  for (let radius = minRadius; radius <= maxRadius; radius += 1) profile[radius] = counts[radius] ? sums[radius] / counts[radius] : 0;
+  const smooth = new Float64Array(maxRadius + 1);
+  const window = Math.max(1, Math.round(options.smoothWindow ?? 2));
+  for (let radius = minRadius; radius <= maxRadius; radius += 1) {
+    let sum = 0; let count = 0;
+    for (let dr = -window; dr <= window; dr += 1) {
+      const index = radius + dr;
+      if (index >= minRadius && index <= maxRadius) { sum += profile[index]; count += 1; }
+    }
+    smooth[radius] = sum / Math.max(1, count);
+  }
+  let mean = 0; let square = 0; let count = 0;
+  for (let radius = minRadius; radius <= maxRadius; radius += 1) { mean += smooth[radius]; square += smooth[radius] ** 2; count += 1; }
+  mean /= Math.max(1, count);
+  const sigma = Math.sqrt(Math.max(0, square / Math.max(1, count) - mean ** 2));
+  const threshold = Math.max(Number(options.minValue ?? 0), mean + Number(options.sigmaThreshold ?? 1.15) * sigma);
+  const candidates = [];
+  const separation = Math.max(3, Math.round(options.minSeparation ?? 7));
+  for (let radius = minRadius + window; radius <= maxRadius - window; radius += 1) {
+    if (smooth[radius] < threshold) continue;
+    let localMax = true;
+    for (let dr = -separation; dr <= separation; dr += 1) {
+      if (dr && smooth[radius + dr] > smooth[radius]) { localMax = false; break; }
+    }
+    if (!localMax) continue;
+    let weighted = 0; let weight = 0;
+    for (let dr = -window - 1; dr <= window + 1; dr += 1) {
+      const value = Math.max(0, smooth[radius + dr] - mean);
+      weighted += (radius + dr) * value; weight += value;
+    }
+    const refinedRadius = weight ? weighted / weight : radius;
+    const d = 1 / (refinedRadius * scale);
+    candidates.push({ radius: refinedRadius, d, dSigma: d / Math.max(refinedRadius, 1), value: smooth[radius], profileScore: (smooth[radius] - mean) / Math.max(sigma, EPS) });
+  }
+  const selected = [];
+  for (const ring of candidates.sort((a, b) => b.value - a.value)) {
+    if (selected.every((other) => Math.abs(other.radius - ring.radius) >= separation)) selected.push(ring);
+    if (selected.length >= Math.max(1, Number(options.maxRings ?? 12))) break;
+  }
+  return selected.sort((a, b) => a.radius - b.radius);
+}
+
+export function matchRings(card, rings, userOptions = {}) {
+  if (!card?.cell || (!Array.isArray(card?.reflections) && !(card?.dValues && card?.hkls)) || !Array.isArray(rings) || !rings.length) return [];
+  const options = {
+    distanceTolerance: 0.1,
+    sigmaMultiplier: 2,
+    toleranceMethod: "rss",
+    minRings: Math.min(2, rings.length),
+    maxRings: 12,
+    maxResults: 1,
+    ...userOptions,
+  };
+  const crystalSystem = card.crystalSystem || CRYSTAL_SYSTEM_BY_CODE[card.classCode] || "Unknown";
+  const usableRings = rings.filter((ring) => Number.isFinite(ring.d) && ring.d > 0).slice(0, Math.max(1, options.maxRings));
+  const count = reflectionCount(card);
+  const matches = [];
+  const used = new Set();
+  for (const ring of usableRings) {
+    const tolerance = combineTolerance(options.distanceTolerance, ring.dSigma || 0, options.sigmaMultiplier, options.toleranceMethod);
+    let best = null;
+    for (let reflectionIndex = 0; reflectionIndex < count; reflectionIndex += 1) {
+      const reflection = normalizedReflectionAt(card, reflectionIndex, crystalSystem);
+      if (!reflection) continue;
+      const residual = Math.abs(reflection.d - ring.d);
+      if (residual > tolerance) continue;
+      const key = keyHkl(reflection.hkl);
+      if (used.has(key)) continue;
+      if (!best || residual < best.residual) best = { ring, hkl: reflection.hkl, dCalculated: reflection.d, residual, tolerance, normalizedResidual: residual / Math.max(tolerance, EPS) };
+    }
+    if (best) { matches.push(best); used.add(keyHkl(best.hkl)); }
+  }
+  if (matches.length < Math.max(1, options.minRings)) return [];
+  const residualScore = matches.reduce((sum, item) => sum + item.normalizedResidual ** 2, 0) / matches.length;
+  const coveragePenalty = (usableRings.length - matches.length) / Math.max(1, usableRings.length);
+  return [{
+    phaseId: card.id,
+    name: card.name,
+    formula: card.formula,
+    kind: "ring",
+    ringMatches: matches,
+    matchedRings: matches.length,
+    observedRings: usableRings.length,
+    dResidual: matches.map((item) => item.residual),
+    dTolerance: matches.map((item) => item.tolerance),
+    score: residualScore + coveragePenalty,
+  }].slice(0, options.maxResults);
 }
 
 function gcd2(a, b) {

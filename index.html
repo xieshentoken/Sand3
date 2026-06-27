@@ -92,10 +92,16 @@
           <button id="snapBright" class="ghost" disabled>亮点吸附：关</button>
           <button id="findParallelogram" class="ghost" disabled>识别当前平行四边形</button>
           <button id="pickPeaks" class="ghost" disabled>手动选 3 点</button>
+          <button id="clearParallelogram" class="ghost" disabled>删除平行四边形</button>
+          <button id="detectRings" class="ghost" disabled>识别 SAED 环</button>
+          <button id="ringEdit" class="ghost" disabled>环手动：关</button>
+          <button id="addRing" class="ghost" disabled>添加环</button>
+          <button id="deleteRing" class="ghost" disabled>删除环</button>
         </div>
         <div class="display-controls">
           <label>亮度 <input id="patternBrightness" type="range" min="-1" max="1" value="0" step="0.02"></label>
           <label>对比度 <input id="patternContrast" type="range" min="0.2" max="4" value="1" step="0.05"></label>
+          <label>锐化 <input id="patternSharpness" type="range" min="0" max="2" value="0" step="0.05"></label>
           <button id="zoomPattern" class="ghost" disabled>框选局部放大</button>
           <button id="zoomPatternOut" class="ghost" disabled>缩小</button>
           <span id="geometryStatus" class="muted">尚未选择平行四边形</span>
@@ -165,7 +171,7 @@
     <section class="panel results-panel">
       <div class="panel-head">
         <div><p class="step-label">06 / 结果</p><h3>匹配候选</h3></div>
-        <div class="toolbar"><label>结果排序<select id="resultSort"><option value="score-asc">评分低→高（最佳优先）</option><option value="score-desc">评分高→低</option></select></label><label class="switch-label"><input id="includeDeleted" type="checkbox"><span></span>包含 D 状态</label><button class="ghost" id="exportResults" disabled>导出 CSV</button><button class="primary" id="runMatch">开始匹配</button></div>
+        <div class="toolbar"><label>匹配模式<select id="matchMode"><option value="three">三晶面 / 平行四边形</option><option value="ring">SAED 多晶环</option></select></label><label>结果排序<select id="resultSort"><option value="score-asc">综合评分低→高（最佳优先）</option><option value="score-desc">综合评分高→低</option></select></label><label class="switch-label"><input id="includeDeleted" type="checkbox"><span></span>包含 D 状态</label><button class="ghost" id="exportResults" disabled>导出 CSV</button><button class="primary" id="runMatch">开始匹配</button></div>
       </div>
       <div class="result-summary" id="resultSummary">输入测量值并载入卡片库后开始匹配。</div>
       <div class="table-wrap">

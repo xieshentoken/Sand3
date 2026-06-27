@@ -143,15 +143,23 @@ export class CrystalDatabase {
     const rows = this.db.prepare(`SELECT * FROM phases WHERE ${where.join(" AND ")}`).iterate(...params);
     const observed = (query.observedD || []).filter((d) => Number.isFinite(d) && d > 0);
     const tolerances = query.dTolerances || observed.map(() => 0.1);
+    const minObservedMatches = observed.length
+      ? Math.max(1, Math.min(observed.length, Math.round(query.minObservedMatches ?? observed.length)))
+      : 0;
     const limit = query.limit || 10000; const output = [];
     for (const row of rows) {
       const elements = (row.elements || "").split("|").filter(Boolean);
       if (!phasePassesElementFilter(elements, query.elementFilter)) continue;
       const dValues = typedCopy(Float32Array, row.d_values); const hkls = typedCopy(Int16Array, row.hkls);
-      const passes = observed.every((d, measurementIndex) => {
-        for (let i = 0; i < dValues.length; i += 1) if (hkls[i * 3] !== 32767 && Math.abs(dValues[i] - d) <= tolerances[measurementIndex]) return true;
-        return false;
-      });
+      let observedMatches = 0;
+      for (let measurementIndex = 0; measurementIndex < observed.length; measurementIndex += 1) {
+        const d = observed[measurementIndex]; let matched = false;
+        for (let i = 0; i < dValues.length; i += 1) {
+          if (hkls[i * 3] !== 32767 && Math.abs(dValues[i] - d) <= tolerances[measurementIndex]) { matched = true; break; }
+        }
+        if (matched) observedMatches += 1;
+      }
+      const passes = observedMatches >= minObservedMatches;
       if (!passes) continue;
       output.push(phaseFromRow(row));
       if (output.length >= limit) break;

@@ -1,13 +1,16 @@
 import {
   combineTolerance,
+  detectRings,
   detectScaleBar,
   detectPeaks,
   estimateMeasurementUncertainty,
   fftMagnitude,
   findParallelograms,
   matchCard,
+  matchRings,
   measurementFromVectors,
   refineInversionCenter,
+  scoreGlobalPeakFit,
   snapToBrightPoint,
 } from "./core.js";
 import { grayToImageData, loadImageFile } from "./image-io.js";
@@ -25,11 +28,11 @@ import {
 const $ = (id) => document.getElementById(id);
 const state = {
   image: null, pattern: null, peaks: [], center: null, parallelograms: [], selected: null,
-  pickMode: null, picked: [], dSigma: [0, 0, 0], phiSigma: [0, 0], results: [],
+  rings: [], pickMode: null, picked: [], dSigma: [0, 0, 0], phiSigma: [0, 0], results: [],
   elementStates: new Map(), reciprocalScale: null, scaleLine: null, roi: null, prefiltered: 0,
   inputTransform: null, inputDrag: null, patternDrag: null, centerLocked: false,
   brightness: 0, contrast: 1, inputView: null, patternView: null, inputMode: null, patternMode: null,
-  roiShape: "rectangle", snapBright: false,
+  roiShape: "rectangle", snapBright: false, sharpness: 0, ringEdit: false, ringEditAction: null, selectedRing: null,
 };
 
 function toast(message, error = false) {
@@ -55,6 +58,15 @@ async function refreshDatabaseStats() {
 function drawGray(context, gray, width, height, x, y, drawWidth, drawHeight, options = {}) {
   const adjusted = new Float32Array(gray.length); const brightness = Number(options.brightness || 0); const contrast = Number(options.contrast ?? 1);
   for (let i = 0; i < gray.length; i += 1) adjusted[i] = Math.max(0, Math.min(1, (gray[i] - 0.5) * contrast + 0.5 + brightness));
+  const sharpness = Math.max(0, Number(options.sharpness || 0));
+  if (sharpness > 0 && width > 2 && height > 2) {
+    const source = new Float32Array(adjusted);
+    for (let yy = 1; yy < height - 1; yy += 1) for (let xx = 1; xx < width - 1; xx += 1) {
+      const index = yy * width + xx;
+      const blur = (source[index - 1] + source[index + 1] + source[index - width] + source[index + width]) * 0.25;
+      adjusted[index] = Math.max(0, Math.min(1, source[index] + (source[index] - blur) * sharpness));
+    }
+  }
   const temp = document.createElement("canvas"); temp.width = width; temp.height = height;
   temp.getContext("2d").putImageData(grayToImageData(adjusted, width, height, { gamma: options.gamma ?? 1 }), 0, 0);
   const source = options.source;
@@ -199,11 +211,22 @@ function drawPattern() {
   const drawW = view.width * scale; const drawH = view.height * scale; const ox = (cssWidth - drawW) / 2; const oy = (cssHeight - drawH) / 2;
   state.canvasTransform = { scale, ox, oy, cssWidth, cssHeight, view };
   context.fillStyle = "#071313"; context.fillRect(0, 0, cssWidth, cssHeight);
-  drawGray(context, state.pattern.gray, state.pattern.width, state.pattern.height, ox, oy, drawW, drawH, { gamma: 0.7, brightness: state.brightness, contrast: state.contrast, source: view });
+  drawGray(context, state.pattern.gray, state.pattern.width, state.pattern.height, ox, oy, drawW, drawH, { gamma: 0.7, brightness: state.brightness, contrast: state.contrast, sharpness: state.sharpness, source: view });
   const map = (point) => ({ x: ox + (point.x - view.x) * scale, y: oy + (point.y - view.y) * scale });
   if (state.center) {
     const { x, y } = map(state.center);
     context.strokeStyle = "white"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(x - 7, y); context.lineTo(x + 7, y); context.moveTo(x, y - 7); context.lineTo(x, y + 7); context.stroke();
+  }
+  if (state.center && state.rings?.length) {
+    const centerPoint = map(state.center);
+    state.rings.slice(0, 8).forEach((ring, index) => {
+      const selected = index === state.selectedRing;
+      context.strokeStyle = selected ? "rgba(142,239,255,.98)" : "rgba(101,216,255,.7)";
+      context.fillStyle = selected ? "rgba(142,239,255,.98)" : "rgba(101,216,255,.88)";
+      context.lineWidth = selected ? 2.2 : 1.2; context.font = "700 10px system-ui";
+      context.beginPath(); context.arc(centerPoint.x, centerPoint.y, ring.radius * scale, 0, Math.PI * 2); context.stroke();
+      context.fillText(`R${index + 1} ${fmt(ring.d, 3)}Å`, centerPoint.x + ring.radius * scale + 4, centerPoint.y - 4);
+    });
   }
   if (state.selected && state.center) {
     const colors = ["#ffd06a", "#ff9c42", "#ffd06a"];
@@ -215,7 +238,7 @@ function drawPattern() {
       context.strokeStyle = colors[index]; context.fillStyle = colors[index]; context.lineWidth = 2;
       context.beginPath(); context.moveTo(cx, cy); context.lineTo(x, y); context.stroke();
       context.beginPath(); context.arc(x, y, 7, 0, Math.PI * 2); context.fillStyle = "rgba(7,19,19,.55)"; context.fill(); context.stroke();
-      context.font = "bold 12px system-ui"; context.fillText(`g${index + 1}`, x + 8, y - 7);
+      context.fillStyle = colors[index]; context.font = "bold 12px system-ui"; context.fillText(`g${index + 1}`, x + 8, y - 7);
     });
   }
   if (state.patternSelection) {
@@ -240,6 +263,72 @@ function maybeSnapPattern(point) {
   if (!state.snapBright || !state.pattern) return point;
   const radius = Math.max(3, Math.min(24, 14 / Math.max(0.2, state.canvasTransform?.scale || 1)));
   return snapToBrightPoint(state.pattern.gray, state.pattern.width, state.pattern.height, point, { radius });
+}
+
+function ringFromRadius(radius, extra = {}) {
+  const value = Math.max(3, Number(radius) || 3);
+  const d = state.reciprocalScale > 0 ? 1 / (value * state.reciprocalScale) : NaN;
+  return { value: 1, profileScore: 0, manual: true, ...extra, radius: value, d, dSigma: Number.isFinite(d) ? d / value : 0 };
+}
+
+function updateRingRadius(index, radius) {
+  if (index == null || !state.rings[index]) return;
+  state.rings[index] = { ...state.rings[index], ...ringFromRadius(radius, state.rings[index]) };
+}
+
+function nearestRing(point) {
+  if (!state.center || !state.rings.length) return null;
+  const radius = Math.hypot(point.x - state.center.x, point.y - state.center.y);
+  const scale = state.canvasTransform?.scale || 1;
+  let best = null;
+  state.rings.forEach((ring, index) => {
+    const delta = Math.abs(ring.radius - radius);
+    if (!best || delta < best.delta) best = { index, ring, delta, radius };
+  });
+  return best && best.delta * scale <= 12 ? best : null;
+}
+
+function ringStatus(prefix = "环手动模式") {
+  $("geometryStatus").textContent = state.rings.length
+    ? `${prefix} · ${state.rings.length} 条环：${state.rings.slice(0, 5).map((ring) => `${fmt(ring.d, 3)} Å`).join(" / ")}`
+    : `${prefix} · 当前无衍射环`;
+}
+
+function setRingEdit(enabled) {
+  state.ringEdit = enabled;
+  state.ringEditAction = null;
+  $("ringEdit").textContent = `环手动：${enabled ? "开" : "关"}`;
+  $("ringEdit").classList.toggle("active", enabled);
+  $("addRing").disabled = !enabled || !state.pattern;
+  $("deleteRing").disabled = !enabled || !state.pattern;
+  if (enabled) {
+    state.pickMode = null; state.patternMode = null;
+    ringStatus("环手动模式：拖动环改半径，拖动 000 改中心");
+  } else {
+    ringStatus("环手动模式关闭");
+  }
+  drawPattern();
+}
+
+function addManualRingAt(point) {
+  if (!state.center) return false;
+  const radius = Math.hypot(point.x - state.center.x, point.y - state.center.y);
+  if (radius < 4) return false;
+  state.rings.push(ringFromRadius(radius));
+  state.rings.sort((a, b) => a.radius - b.radius);
+  state.selectedRing = state.rings.findIndex((ring) => Math.abs(ring.radius - radius) < 1e-6);
+  ringStatus("已添加衍射环");
+  drawPattern();
+  return true;
+}
+
+function deleteRing(index = state.selectedRing) {
+  if (index == null || !state.rings[index]) return false;
+  state.rings.splice(index, 1);
+  state.selectedRing = state.rings.length ? Math.min(index, state.rings.length - 1) : null;
+  ringStatus("已删除衍射环");
+  drawPattern();
+  return true;
 }
 
 function updateMeasurement(selected, quick = false) {
@@ -273,6 +362,31 @@ function identifyCurrentGeometry() {
   const candidate = findParallelograms(state.peaks, state.center, { closureTolerance: 0.045, maxResults: 1 })[0];
   if (!candidate) { $("geometryStatus").textContent = "未找到闭合几何，可手动选择三点"; state.selected = null; drawPattern(); return false; }
   setCurrentGeometry(candidate); return true;
+}
+
+function clearCurrentGeometry() {
+  state.selected = null; state.parallelograms = []; state.pickMode = null; state.picked = [];
+  state.dSigma = [0, 0, 0]; state.phiSigma = [0, 0];
+  ["d1", "d2", "d3", "phi12", "phi23"].forEach((id) => { $(id).value = "0"; });
+  $("uncertaintyReadout").textContent = "自动测量不确定度：等待选点";
+  $("geometryStatus").textContent = "已删除当前平行四边形";
+  drawPattern();
+}
+
+function detectCurrentRings(showToast = true) {
+  if (!state.pattern || !state.center) throw new Error("请先生成 / 载入 SAED 几何图");
+  if ($("imageMode").value !== "saed") throw new Error("SAED 环匹配只用于选区电子衍射原图");
+  state.rings = detectRings(state.pattern.gray, state.pattern.width, state.pattern.height, state.center, state.reciprocalScale, {
+    sigmaThreshold: Math.max(0.8, number("peakThreshold") * 0.35), maxRings: 12,
+    minRadius: Math.max(10, Math.min(state.pattern.width, state.pattern.height) * 0.025),
+  });
+  state.selectedRing = null; state.ringEditAction = null;
+  $("geometryStatus").textContent = state.rings.length
+    ? `已识别 ${state.rings.length} 条 SAED 环：${state.rings.slice(0, 5).map((ring) => `${fmt(ring.d, 3)} Å`).join(" / ")}`
+    : "未识别到可靠 SAED 环";
+  drawPattern();
+  if (showToast) toast(state.rings.length ? `已识别 ${state.rings.length} 条 SAED 环` : "未识别到可靠 SAED 环", !state.rings.length);
+  return state.rings;
 }
 
 function resampleForSaed(image, maxSize = 1200) {
@@ -314,10 +428,16 @@ async function analyzeImage() {
         center: state.center, sigmaThreshold: number("peakThreshold"), maxPeaks: 160,
       });
     }
-    state.parallelograms = []; state.patternView = null;
+    state.parallelograms = []; state.rings = []; state.selectedRing = null; state.ringEdit = false; state.ringEditAction = null; state.patternView = null;
     state.selected = null; state.centerLocked = false; $("lockCenter").textContent = "固定 000";
+    $("ringEdit").textContent = "环手动：关"; $("ringEdit").classList.remove("active");
     $("canvasEmpty").classList.add("hidden");
-    for (const id of ["lockCenter", "snapBright", "findParallelogram", "pickPeaks", "zoomPattern", "zoomPatternOut"]) $(id).disabled = false;
+    for (const id of ["lockCenter", "snapBright", "findParallelogram", "pickPeaks", "clearParallelogram", "zoomPattern", "zoomPatternOut"]) $(id).disabled = false;
+    const ringEnabled = mode === "saed";
+    $("detectRings").disabled = !ringEnabled;
+    $("ringEdit").disabled = !ringEnabled;
+    $("addRing").disabled = true;
+    $("deleteRing").disabled = true;
     $("geometryStatus").textContent = "等待识别当前一组或手动选择三点"; drawPattern();
     status(`检测到 ${state.peaks.length} 个峰`); toast(`已检测 ${state.peaks.length} 个亮点，请识别当前平行四边形`);
   } catch (error) { status("分析失败"); toast(error.message, true); }
@@ -327,7 +447,7 @@ async function analyzeImage() {
 async function onImageFile(file) {
   if (!file) return;
   try {
-    status("正在读取图像…"); state.image = await loadImageFile(file); state.roi = null; state.inputView = null; state.patternView = null; state.inputMode = null; state.patternMode = null;
+    status("正在读取图像…"); state.image = await loadImageFile(file); state.roi = null; state.rings = []; state.inputView = null; state.patternView = null; state.inputMode = null; state.patternMode = null;
     $("imageBadge").textContent = `${state.image.format} · ${state.image.width}×${state.image.height}`; $("imageBadge").classList.add("active");
     if (state.image.calibration?.suggestedMode) $("imageMode").value = state.image.calibration.suggestedMode;
     else $("imageMode").value = inferImageMode(state.image);
@@ -450,13 +570,30 @@ function getMeasurement() {
   return { d1: number("d1"), d2: number("d2"), d3: number("d3"), phi12: number("phi12"), phi23: number("phi23"), dSigma: state.dSigma, phiSigma: state.phiSigma };
 }
 
-async function runMatch() {
-  const measurement = getMeasurement();
-  if ([measurement.d1, measurement.d2, measurement.d3].some((value) => !(value > 0))) return toast("请先测量或填写三个有效晶面距", true);
-  const options = {
+function matchOptions() {
+  return {
     distanceTolerance: number("distanceTolerance"), angleTolerance: number("angleTolerance"), sigmaMultiplier: number("sigmaMultiplier"),
     toleranceMethod: $("toleranceMethod").value, diffractionOrder: number("diffractionOrder"), maxResults: 40,
   };
+}
+
+function addGlobalScore(result, phase, options) {
+  if (!state.selected || !state.center || !state.peaks.length) return { ...result, phase, rankingScore: result.score };
+  const basisVectors = [
+    { x: state.selected[0].x - state.center.x, y: state.selected[0].y - state.center.y },
+    { x: state.selected[2].x - state.center.x, y: state.selected[2].y - state.center.y },
+  ];
+  const global = scoreGlobalPeakFit(result, phase, state.peaks, state.center, state.reciprocalScale, {
+    basisVectors, distanceTolerance: options.distanceTolerance, maxOrder: 5, maxPeaks: 36,
+  });
+  const rankingScore = result.score + (global ? global.score * 0.35 : 0);
+  return { ...result, phase, globalScore: global?.score ?? null, globalMatched: global?.matched ?? 0, globalTotal: global?.total ?? 0, globalMeanResidual: global?.meanResidual ?? null, rankingScore };
+}
+
+async function runThreePlaneMatch() {
+  const measurement = getMeasurement();
+  if ([measurement.d1, measurement.d2, measurement.d3].some((value) => !(value > 0))) return toast("请先测量或填写三个有效晶面距", true);
+  const options = matchOptions();
   const dTolerances = state.dSigma.map((sigma) => combineTolerance(options.distanceTolerance, sigma, options.sigmaMultiplier, options.toleranceMethod));
   $("runMatch").disabled = true; status("正在预筛选晶相…");
   try {
@@ -466,27 +603,71 @@ async function runMatch() {
     });
     status(`正在计算 ${phases.length.toLocaleString()} 个候选…`); const all = [];
     for (let i = 0; i < phases.length; i += 1) {
-      all.push(...matchCard(phases[i], measurement, options).map((result) => ({ ...result, phase: phases[i] })));
+      all.push(...matchCard(phases[i], measurement, options).map((result) => addGlobalScore(result, phases[i], options)));
       if (i % 80 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    state.results = all.sort((a, b) => a.score - b.score).slice(0, 250); state.prefiltered = phases.length; renderResults();
+    state.results = all.sort((a, b) => (a.rankingScore ?? a.score) - (b.rankingScore ?? b.score)).slice(0, 250); state.prefiltered = phases.length; renderResults();
     status(`匹配完成：${state.results.length} 个结果`); $("exportResults").disabled = !state.results.length;
   } catch (error) { status("匹配失败"); toast(error.message, true); }
   finally { $("runMatch").disabled = false; }
 }
 
+async function runRingMatch() {
+  const options = matchOptions();
+  let rings;
+  try { rings = state.rings?.length ? state.rings : detectCurrentRings(false); }
+  catch (error) { toast(error.message, true); return; }
+  if (!rings.length) return toast("请先识别到有效 SAED 环", true);
+  const dTolerances = rings.map((ring) => combineTolerance(options.distanceTolerance, ring.dSigma || 0, options.sigmaMultiplier, options.toleranceMethod));
+  $("runMatch").disabled = true; status("正在按 SAED 环预筛选晶相…");
+  try {
+    const phases = await queryPhases({
+      elementFilter: elementFilter(), observedD: rings.map((ring) => ring.d), dTolerances,
+      minObservedMatches: Math.min(3, Math.max(1, rings.length - 1)),
+      statuses: $("includeDeleted").checked ? ["P", "A", "D", "CIF", "TXT"] : ["P", "A", "CIF", "TXT"], indexedOnly: true, limit: 25000,
+    });
+    status(`正在计算 ${phases.length.toLocaleString()} 个环匹配候选…`); const all = [];
+    for (let i = 0; i < phases.length; i += 1) {
+      all.push(...matchRings(phases[i], rings, {
+        distanceTolerance: options.distanceTolerance, sigmaMultiplier: options.sigmaMultiplier,
+        toleranceMethod: options.toleranceMethod, minRings: Math.min(3, rings.length), maxRings: 12,
+      }).map((result) => ({ ...result, phase: phases[i], rankingScore: result.score })));
+      if (i % 120 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    state.results = all.sort((a, b) => (a.rankingScore ?? a.score) - (b.rankingScore ?? b.score)).slice(0, 250);
+    state.prefiltered = phases.length; renderResults();
+    status(`SAED 环匹配完成：${state.results.length} 个结果`); $("exportResults").disabled = !state.results.length;
+  } catch (error) { status("环匹配失败"); toast(error.message, true); }
+  finally { $("runMatch").disabled = false; }
+}
+
+async function runMatch() {
+  if ($("matchMode").value === "ring") return runRingMatch();
+  return runThreePlaneMatch();
+}
+
+function resultScore(result) { return result.rankingScore ?? result.score; }
+
 function orderedResults() {
   const direction = $("resultSort").value === "score-desc" ? -1 : 1;
-  return [...state.results].sort((a, b) => direction * (a.score - b.score));
+  return [...state.results].sort((a, b) => direction * (resultScore(a) - resultScore(b)));
 }
 
 function renderResults(prefiltered = state.prefiltered) {
   const body = $("resultsBody"); body.replaceChildren();
-  $("resultSummary").textContent = `晶面距预筛选 ${prefiltered.toLocaleString()} 个物相；完整闭合、晶面距及夹角判据得到 ${state.results.length.toLocaleString()} 个结果。`;
-  if (!state.results.length) { body.innerHTML = '<tr><td colspan="8" class="empty-cell">没有满足全部硬判据的候选相</td></tr>'; return; }
+  const mode = state.results[0]?.kind === "ring" || $("matchMode").value === "ring" ? "SAED 环匹配" : "三晶面硬判据 + 多峰排序";
+  $("resultSummary").textContent = `${mode}：预筛选 ${prefiltered.toLocaleString()} 个物相；得到 ${state.results.length.toLocaleString()} 个结果。`;
+  if (!state.results.length) { body.innerHTML = '<tr><td colspan="8" class="empty-cell">没有满足当前匹配条件的候选相</td></tr>'; return; }
   orderedResults().forEach((result, index) => {
     const row = document.createElement("tr");
-    row.innerHTML = `<td>${index + 1}</td><td><span class="status-pill">${result.phase.status}</span><span class="phase-name">${result.phase.pdfNumber || result.phase.name}</span><div class="phase-formula">${result.phase.name}${result.phase.formula ? ` · ${result.phase.formula}` : ""}</div></td><td>${result.phase.elements.join(" ")}</td><td class="mono">${hkl(result.hkl1)} + ${hkl(result.hkl3)} = ${hkl(result.hkl2)}</td><td class="mono">[${result.zoneAxis.join(" ")}]</td><td class="mono">${result.dResidual.map((v) => fmt(v, 4)).join(" / ")}</td><td class="mono">${result.phiResidual.map((v) => fmt(v, 3)).join(" / ")}</td><td class="score">${fmt(result.score, 4)}</td>`;
+    const phaseText = `<span class="status-pill">${result.phase.status}</span><span class="phase-name">${result.phase.pdfNumber || result.phase.name}</span><div class="phase-formula">${result.phase.name}${result.phase.formula ? ` · ${result.phase.formula}` : ""}</div>`;
+    if (result.kind === "ring") {
+      const ringText = result.ringMatches.slice(0, 5).map((match, i) => `R${i + 1}:${hkl(match.hkl)}`).join(" ");
+      row.innerHTML = `<td>${index + 1}</td><td>${phaseText}</td><td>${result.phase.elements.join(" ")}</td><td class="mono">${ringText}</td><td class="mono">多晶环</td><td class="mono">${result.dResidual.map((v) => fmt(v, 4)).join(" / ")}</td><td class="mono">—</td><td class="score">${fmt(resultScore(result), 4)}<div class="phase-formula">${result.matchedRings}/${result.observedRings} 环</div></td>`;
+    } else {
+      const globalText = result.globalScore == null ? "" : `<div class="phase-formula">硬 ${fmt(result.score, 3)} · 多峰 ${fmt(result.globalScore, 3)}（${result.globalMatched}/${result.globalTotal}）</div>`;
+      row.innerHTML = `<td>${index + 1}</td><td>${phaseText}</td><td>${result.phase.elements.join(" ")}</td><td class="mono">${hkl(result.hkl1)} + ${hkl(result.hkl3)} = ${hkl(result.hkl2)}</td><td class="mono">[${result.zoneAxis.join(" ")}]</td><td class="mono">${result.dResidual.map((v) => fmt(v, 4)).join(" / ")}</td><td class="mono">${result.phiResidual.map((v) => fmt(v, 3)).join(" / ")}</td><td class="score">${fmt(resultScore(result), 4)}${globalText}</td>`;
+    }
     body.append(row);
   });
 }
@@ -494,8 +675,13 @@ function renderResults(prefiltered = state.prefiltered) {
 function exportCsv() {
   if (!state.results.length) return;
   const quote = (value) => `"${String(value).replaceAll('"', '""')}"`;
-  const rows = [["rank","phase","name","formula","hkl1","hkl2","hkl3","zone_axis","d_residual","angle_residual","score"]];
-  orderedResults().forEach((r, i) => rows.push([i + 1, r.phase.pdfNumber || r.phase.id, r.phase.name, r.phase.formula, hkl(r.hkl1), hkl(r.hkl2), hkl(r.hkl3), `[${r.zoneAxis.join(" ")}]`, r.dResidual.join("/"), r.phiResidual.join("/"), r.score]));
+  const rows = [["rank","mode","phase","name","formula","hkl_or_rings","zone_axis","d_residual","angle_residual","hard_score","global_score","ranking_score"]];
+  orderedResults().forEach((r, i) => rows.push([
+    i + 1, r.kind === "ring" ? "ring" : "three-plane", r.phase.pdfNumber || r.phase.id, r.phase.name, r.phase.formula,
+    r.kind === "ring" ? r.ringMatches.map((match) => hkl(match.hkl)).join(" ") : `${hkl(r.hkl1)} + ${hkl(r.hkl3)} = ${hkl(r.hkl2)}`,
+    r.kind === "ring" ? "polycrystalline-ring" : `[${r.zoneAxis.join(" ")}]`, r.dResidual.join("/"), r.kind === "ring" ? "" : r.phiResidual.join("/"),
+    r.kind === "ring" ? "" : r.score, r.globalScore ?? "", resultScore(r),
+  ]));
   const blob = new Blob([rows.map((row) => row.map(quote).join(",")).join("\n")], { type: "text/csv;charset=utf-8" });
   const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `sand3-results-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); URL.revokeObjectURL(link.href);
 }
@@ -554,6 +740,26 @@ $("patternCanvas").addEventListener("pointerdown", (event) => {
     else toast(`已选择 g${state.picked.length}，请继续选择 g${state.picked.length + 1}`);
     drawPattern(); return;
   }
+  if (state.ringEdit) {
+    if (!state.centerLocked && state.center && Math.hypot(point.x - state.center.x, point.y - state.center.y) * scale <= 14) {
+      state.patternDrag = { type: "center" }; $("patternCanvas").setPointerCapture(event.pointerId); return;
+    }
+    if (state.ringEditAction === "add") {
+      if (!addManualRingAt(point)) return toast("添加环的位置离 000 过近", true);
+      state.patternDrag = { type: "ring", index: state.selectedRing }; $("patternCanvas").setPointerCapture(event.pointerId); return;
+    }
+    const nearest = nearestRing(point);
+    if (state.ringEditAction === "delete") {
+      if (!nearest) return toast("请点击需要删除的衍射环", true);
+      deleteRing(nearest.index); state.ringEditAction = null; return;
+    }
+    if (nearest) {
+      state.selectedRing = nearest.index; state.patternDrag = { type: "ring", index: nearest.index };
+      ringStatus(`已选中 R${nearest.index + 1}，拖动可修改半径`);
+      drawPattern(); $("patternCanvas").setPointerCapture(event.pointerId); return;
+    }
+    state.selectedRing = null; ringStatus("环手动模式：未选中环"); drawPattern(); return;
+  }
   if (!state.centerLocked && state.center && Math.hypot(point.x - state.center.x, point.y - state.center.y) * scale <= 14) state.patternDrag = { type: "center" };
   else if (state.selected) {
     const index = state.selected.findIndex((p) => Math.hypot(point.x - p.x, point.y - p.y) * scale <= 15);
@@ -565,6 +771,12 @@ $("patternCanvas").addEventListener("pointermove", (event) => {
   if (!state.patternDrag) return; let point = canvasPoint(event);
   point.x = Math.max(0, Math.min(state.pattern.width - 1, point.x)); point.y = Math.max(0, Math.min(state.pattern.height - 1, point.y));
   if (state.patternDrag.type === "zoom") { state.patternSelection = clampView(normalizedSelection(state.patternDrag.start, point), state.pattern, 1); drawPattern(); return; }
+  if (state.patternDrag.type === "ring") {
+    const radius = Math.hypot(point.x - state.center.x, point.y - state.center.y);
+    updateRingRadius(state.patternDrag.index, radius); state.selectedRing = state.patternDrag.index;
+    ringStatus(`正在调整 R${state.patternDrag.index + 1}`);
+    drawPattern(); return;
+  }
   point = maybeSnapPattern(point);
   if (state.patternDrag.type === "center") state.center = point; else state.selected[state.patternDrag.index] = { ...state.selected[state.patternDrag.index], ...point };
   if (state.selected) { updateMeasurement(state.selected, true); $("geometryStatus").textContent = state.snapBright && point.snapped ? "当前一组 · 已吸附亮点" : "当前一组 · 手动调整"; } else drawPattern();
@@ -572,6 +784,9 @@ $("patternCanvas").addEventListener("pointermove", (event) => {
 $("patternCanvas").addEventListener("pointerup", () => {
   if (state.patternDrag?.type === "zoom" && state.patternSelection?.width >= 6 && state.patternSelection?.height >= 6) {
     state.patternView = clampView(state.patternSelection, state.pattern); toast("已放大几何图局部区域");
+  } else if (state.patternDrag?.type === "ring") {
+    state.rings.sort((a, b) => a.radius - b.radius);
+    state.selectedRing = null; state.ringEditAction = null; ringStatus("环半径已更新");
   } else if (state.patternDrag && state.selected) updateMeasurement(state.selected);
   state.patternSelection = null; state.patternMode = null; state.patternDrag = null; drawPattern();
 });
@@ -580,6 +795,23 @@ $("lockCenter").addEventListener("click", () => { state.centerLocked = !state.ce
 $("snapBright").addEventListener("click", () => { state.snapBright = !state.snapBright; $("snapBright").textContent = `亮点吸附：${state.snapBright ? "开" : "关"}`; $("snapBright").classList.toggle("active", state.snapBright); toast(state.snapBright ? "拖动 000 或 g 点时将吸附至局部亮点" : "亮点吸附已关闭"); });
 $("findParallelogram").addEventListener("click", () => { const found = identifyCurrentGeometry(); toast(found ? "已识别并选定当前一组平行四边形" : "未识别到满足闭合条件的一组", !found); });
 $("pickPeaks").addEventListener("click", () => { state.pickMode = "peaks"; state.picked = []; toast("请依次点击 g₁、g₂、g₃"); });
+$("clearParallelogram").addEventListener("click", () => { clearCurrentGeometry(); toast("已删除当前平行四边形"); });
+$("detectRings").addEventListener("click", () => { try { detectCurrentRings(true); } catch (error) { toast(error.message, true); } });
+$("ringEdit").addEventListener("click", () => {
+  try {
+    if ($("imageMode").value !== "saed") throw new Error("环手动模式仅用于 SAED 多晶环");
+    setRingEdit(!state.ringEdit);
+  } catch (error) { toast(error.message, true); }
+});
+$("addRing").addEventListener("click", () => {
+  if (!state.ringEdit) setRingEdit(true);
+  state.ringEditAction = "add"; toast("请在图中点击新衍射环的半径位置");
+});
+$("deleteRing").addEventListener("click", () => {
+  if (!state.ringEdit) setRingEdit(true);
+  if (deleteRing()) return toast("已删除选中的衍射环");
+  state.ringEditAction = "delete"; toast("请点击需要删除的衍射环");
+});
 $("zoomPattern").addEventListener("click", () => { state.patternMode = "zoom"; toast("请在几何图上框选需要放大的区域"); });
 $("zoomPatternOut").addEventListener("click", () => {
   if (!state.patternView) return toast("几何图已是原始显示范围");
@@ -589,11 +821,16 @@ $("zoomPatternOut").addEventListener("click", () => {
 });
 $("patternBrightness").addEventListener("input", (event) => { state.brightness = Number(event.target.value); drawPattern(); });
 $("patternContrast").addEventListener("input", (event) => { state.contrast = Number(event.target.value); drawPattern(); });
+$("patternSharpness").addEventListener("input", (event) => { state.sharpness = Number(event.target.value); drawPattern(); });
 $("pdf2File").addEventListener("change", (event) => importDat(event.target.files[0]));
 $("phaseFiles").addEventListener("change", (event) => importPhaseFiles([...event.target.files]));
 $("searchCards").addEventListener("click", searchCards);
 $("elementLogic").addEventListener("change", updateElementUI);
 $("resultSort").addEventListener("change", () => renderResults());
+$("matchMode").addEventListener("change", () => {
+  $("runMatch").textContent = $("matchMode").value === "ring" ? "开始环匹配" : "开始匹配";
+  renderResults();
+});
 $("clearDatabase").addEventListener("click", async () => {
   if (!confirm("确认清空 Sand3/database 中的全部卡片索引？原始 pdf2.dat 不会被删除。")) return;
   await clearDatabase(); await refreshDatabaseStats(); toast("Sand3 持久数据库已清空");
