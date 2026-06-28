@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Sand3 Industrial 卡片详情">
+  <title>Sand3 Industrial · 卡片详情</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./industrial.css">
+</head>
+<body class="card-detail-page">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">PHASE CARD INTELLIGENCE FILE</p>
+      <h1>Card<span>View</span></h1>
+    </div>
+    <div class="top-status"><span class="status-dot"></span><span id="cardStatus">读取中</span></div>
+  </header>
+
+  <main>
+    <section class="hero card-hero">
+      <div>
+        <p class="step-label">PDF / CIF / TXT CARD</p>
+        <h2 id="phaseTitle">正在读取卡片</h2>
+      </div>
+      <div class="workflow" aria-label="卡片摘要">
+        <span id="phaseBadge">[ PENDING ]</span><i></i><span id="phaseSource">LOCAL SQLITE</span>
+      </div>
+    </section>
+
+    <section class="workspace-grid card-grid">
+      <article class="panel">
+        <div class="panel-head">
+          <div><p class="step-label">01 / 摘要</p><h3>物相信息</h3></div>
+          <span id="phaseStatus" class="badge">—</span>
+        </div>
+        <dl class="card-dl" id="summaryList"></dl>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div><p class="step-label">02 / 晶胞</p><h3>晶体参数</h3></div>
+          <span id="indexedBadge" class="badge">—</span>
+        </div>
+        <dl class="card-dl" id="cellList"></dl>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><p class="step-label">03 / 反射</p><h3>匹配用三指数列表</h3></div>
+        <span id="reflectionCount" class="badge">0</span>
+      </div>
+      <div class="result-summary" id="reflectionSummary">等待数据。</div>
+      <div class="table-wrap card-table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>d（Å）</th><th>h</th><th>k</th><th>l</th><th>强度</th></tr></thead>
+          <tbody id="reflectionBody"><tr><td colspan="6" class="empty-cell">正在读取</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><p class="step-label">04 / 原始卡片</p><h3>原始晶面内容</h3></div>
+        <span id="rawReflectionCount" class="badge">0</span>
+      </div>
+      <div class="result-summary" id="rawReflectionSummary">等待数据。</div>
+      <div class="table-wrap card-table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>d（Å）</th><th>强度</th><th>h</th><th>k</th><th>i</th><th>l</th><th>来源 / 原始行</th></tr></thead>
+          <tbody id="rawReflectionBody"><tr><td colspan="8" class="empty-cell">正在读取</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><p class="step-label">05 / 原始记录</p><h3>PDF2 / CIF / TXT 全量条目</h3></div>
+        <span id="rawRecordCount" class="badge">0</span>
+      </div>
+      <div class="result-summary" id="rawRecordSummary">等待数据。</div>
+      <div class="table-wrap card-table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>记录码</th><th>Tag</th><th>原始内容</th></tr></thead>
+          <tbody id="rawRecordBody"><tr><td colspan="4" class="empty-cell">正在读取</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>Sand3 Industrial · Local card view</footer>
+  <div class="toast" id="toast" role="status"></div>
+  <script type="module" src="./card.js"></script>
+</body>
+</html>

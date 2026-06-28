@@ -32,7 +32,7 @@ const state = {
   elementStates: new Map(), reciprocalScale: null, scaleLine: null, roi: null, prefiltered: 0,
   inputTransform: null, inputDrag: null, patternDrag: null, centerLocked: false,
   brightness: 0, contrast: 1, inputView: null, patternView: null, inputMode: null, patternMode: null,
-  roiShape: "rectangle", snapBright: false, sharpness: 0, ringEdit: false, ringEditAction: null, selectedRing: null,
+  roiShape: "square", snapBright: false, sharpness: 0, ringEdit: false, ringEditAction: null, selectedRing: null,
 };
 
 function toast(message, error = false) {
@@ -51,8 +51,8 @@ async function refreshDatabaseStats() {
   $("dbBadge").classList.toggle("active", stats.phases > 0);
   if (stats.sources.length) {
     const latest = stats.sources.sort((a, b) => b.importedAt - a.importedAt)[0];
-    $("dbInfo").textContent = `${stats.sources.length} 个数据源；最近导入 ${latest.name}${latest.cards ? `，${latest.cards.toLocaleString()} 张卡片` : ""}；保存于 Sand3/database/sand3.sqlite`;
-  } else $("dbInfo").textContent = "持久数据库：Sand3/database/sand3.sqlite；导入一次，后续启动直接调用。";
+    $("dbInfo").textContent = `${stats.sources.length} 个数据源；最近导入 ${latest.name}${latest.cards ? `，${latest.cards.toLocaleString()} 张卡片` : ""}；保存于 Sand3-Industrial/database/sand3.sqlite`;
+  } else $("dbInfo").textContent = "持久数据库：Sand3-Industrial/database/sand3.sqlite；导入一次，后续启动直接调用。";
 }
 
 function drawGray(context, gray, width, height, x, y, drawWidth, drawHeight, options = {}) {
@@ -83,6 +83,9 @@ function normalizedSelection(start, end, square = false) {
 function clampView(view, image, minimum = 12) {
   const width = Math.max(minimum, Math.min(image.width, view.width)); const height = Math.max(minimum, Math.min(image.height, view.height));
   return { x: Math.max(0, Math.min(image.width - width, view.x)), y: Math.max(0, Math.min(image.height - height, view.y)), width, height };
+}
+function pointInRect(point, rect) {
+  return rect && point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
 }
 
 function physicalLabel() { return `${$("scaleValue").value || "?"} ${$("scaleUnit").selectedOptions[0]?.textContent || ""}`; }
@@ -157,7 +160,7 @@ async function recognizeScaleText() {
 function drawInputImage() {
   if (!state.image) return;
   const canvas = $("inputCanvas"); const wrap = $("inputCanvasWrap"); const ratio = window.devicePixelRatio || 1;
-  const cssWidth = Math.max(280, wrap.clientWidth); const cssHeight = 330;
+  const cssWidth = Math.max(280, wrap.clientWidth); const cssHeight = 495;
   canvas.width = cssWidth * ratio; canvas.height = cssHeight * ratio;
   const context = canvas.getContext("2d"); context.setTransform(ratio, 0, 0, ratio, 0, 0);
   const view = state.inputView || fullView(state.image);
@@ -170,7 +173,8 @@ function drawInputImage() {
   if (state.roi && $("imageMode").value === "hrtem") {
     context.strokeStyle = "#4fd2ca"; context.lineWidth = 1.5; context.setLineDash([6, 4]);
     const roiPoint = map(state.roi); context.strokeRect(roiPoint.x, roiPoint.y, state.roi.width * scale, state.roi.height * scale); context.setLineDash([]);
-    context.fillStyle = "#4fd2ca"; context.font = "700 10px system-ui"; context.fillText("FFT ROI", roiPoint.x + 5, roiPoint.y + 14);
+    context.fillStyle = "rgba(79,210,202,.14)"; context.fillRect(roiPoint.x, roiPoint.y, state.roi.width * scale, state.roi.height * scale);
+    context.fillStyle = "#4fd2ca"; context.font = "700 10px system-ui"; context.fillText("FFT ROI · 可拖动", roiPoint.x + 5, roiPoint.y + 14);
   }
   if (state.scaleLine) {
     const a = map(state.scaleLine.a); const b = map(state.scaleLine.b);
@@ -488,6 +492,38 @@ const periodicRows = [
   ["","","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu","",""],
   ["","","Th","Pa","U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr","",""]
 ];
+const allElementSymbols = periodicRows.flat().filter(Boolean);
+const elementOrder = new Map(allElementSymbols.map((element, index) => [element, index]));
+
+function orderedElements(elements) {
+  return [...new Set(elements || [])].sort((a, b) => (elementOrder.get(a) ?? 999) - (elementOrder.get(b) ?? 999) || a.localeCompare(b));
+}
+
+function exactElementSets(required, optional, limit = 4096) {
+  if (!required.length && !optional.length) return [];
+  if (!optional.length) return [orderedElements(required)];
+  if (optional.length > 12) return null;
+  const sets = []; const total = 2 ** optional.length;
+  for (let mask = 0; mask < total; mask += 1) {
+    if (!required.length && mask === 0) continue;
+    const maybe = optional.filter((_, index) => mask & (1 << index));
+    const set = [...required, ...maybe];
+    if (set.length) sets.push(set);
+    if (sets.length > limit) return null;
+  }
+  return sets;
+}
+
+function formatElementRule(required, optional, sets) {
+  if (!required.length && !optional.length) return "未设置元素限制";
+  if (!sets) {
+    const must = required.length ? `一定包含 ${required.join("、")}` : "无必选元素";
+    const maybe = optional.length ? `可能包含 ${optional.join("、")}` : "无可能元素";
+    return `only ${must}；${maybe}；其他元素不包含（组合过多，按同一规则筛选）`;
+  }
+  const terms = sets.map((set) => `(${set.join(" and ")})`);
+  return terms.length > 2 ? `only (${terms.join(" and ")})` : `only ${terms.join(" and ")}`;
+}
 
 function renderElements() {
   const grid = $("elementGrid"); grid.replaceChildren();
@@ -495,7 +531,7 @@ function renderElements() {
     const button = document.createElement("button"); button.className = symbol ? "element" : "element placeholder"; button.textContent = symbol;
     if (symbol) button.addEventListener("click", () => {
       const current = state.elementStates.get(symbol) || "neutral";
-      state.elementStates.set(symbol, current === "neutral" ? "required" : current === "required" ? "excluded" : "neutral");
+      state.elementStates.set(symbol, current === "neutral" ? "required" : current === "required" ? "optional" : "neutral");
       updateElementUI();
     });
     grid.append(button);
@@ -504,17 +540,22 @@ function renderElements() {
 
 function updateElementUI() {
   $("elementGrid").querySelectorAll(".element:not(.placeholder)").forEach((button) => {
-    const value = state.elementStates.get(button.textContent) || "neutral"; button.classList.toggle("required", value === "required"); button.classList.toggle("excluded", value === "excluded");
+    const value = state.elementStates.get(button.textContent) || "neutral";
+    button.classList.toggle("required", value === "required");
+    button.classList.toggle("optional", value === "optional");
   });
   const filter = elementFilter();
-  $("elementSummary").textContent = filter.required.length || filter.excluded.length
-    ? `${filter.logic === "or" ? "包含任一" : "必须全部包含"}：${filter.required.join("、") || "无"}；排除：${filter.excluded.join("、") || "无"}` : "未设置元素限制";
+  $("elementSummary").textContent = formatElementRule(filter.required, filter.optional, filter.exactElementSets);
 }
 
 function elementFilter() {
-  const required = []; const excluded = [];
-  for (const [element, value] of state.elementStates) { if (value === "required") required.push(element); if (value === "excluded") excluded.push(element); }
-  return { required, excluded, allowed: required, onlyAllowed: $("onlyAllowed").checked, logic: $("elementLogic").value };
+  const required = []; const optional = [];
+  for (const [element, value] of state.elementStates) { if (value === "required") required.push(element); if (value === "optional") optional.push(element); }
+  const must = orderedElements(required); const maybe = orderedElements(optional);
+  const allowed = orderedElements([...must, ...maybe]);
+  const sets = exactElementSets(must, maybe);
+  const excluded = allowed.length ? allElementSymbols.filter((element) => !allowed.includes(element)) : [];
+  return { required: must, optional: maybe, allowed, excluded, onlySelectedElements: allowed.length > 0, exactElementSets: sets || undefined };
 }
 
 async function importDat(file) {
@@ -523,7 +564,7 @@ async function importDat(file) {
   try {
     const result = await importPdf2Dat(file, { onProgress(info) {
       if (Number.isFinite(info.ratio)) $("importProgressBar").style.width = `${(info.ratio * 100).toFixed(1)}%`;
-      $("dbInfo").textContent = `正在写入 Sand3/database：${((info.ratio || 0) * 100).toFixed(1)}%`;
+      $("dbInfo").textContent = `正在写入 Sand3-Industrial/database：${((info.ratio || 0) * 100).toFixed(1)}%`;
     }});
     toast(result.skipped ? "该 PDF2.DAT 已建立索引" : `已导入 ${result.cards.toLocaleString()} 张 PDF 卡片`);
     await refreshDatabaseStats(); status("数据库就绪");
@@ -660,6 +701,16 @@ function renderResults(prefiltered = state.prefiltered) {
   if (!state.results.length) { body.innerHTML = '<tr><td colspan="8" class="empty-cell">没有满足当前匹配条件的候选相</td></tr>'; return; }
   orderedResults().forEach((result, index) => {
     const row = document.createElement("tr");
+    row.dataset.phaseId = result.phase.id;
+    row.title = "双击打开对应 PDF/CIF/TXT 卡片信息";
+    row.addEventListener("dblclick", () => {
+      const phaseId = result.phase.id || result.phase.pdfNumber || result.phase.cardKey || "";
+      if (!phaseId) return;
+      const url = new URL("card.html", location.href);
+      url.searchParams.set("id", phaseId);
+      const opened = window.open(url.href, "_blank");
+      if (!opened) location.href = url.href;
+    });
     const phaseText = `<span class="status-pill">${result.phase.status}</span><span class="phase-name">${result.phase.pdfNumber || result.phase.name}</span><div class="phase-formula">${result.phase.name}${result.phase.formula ? ` · ${result.phase.formula}` : ""}</div>`;
     if (result.kind === "ring") {
       const ringText = result.ringMatches.slice(0, 5).map((match, i) => `R${i + 1}:${hkl(match.hkl)}`).join(" ");
@@ -704,6 +755,9 @@ $("inputCanvas").addEventListener("pointerdown", (event) => {
     const endpoints = [state.scaleLine?.a, state.scaleLine?.b];
     const index = endpoints.findIndex((p) => p && Math.hypot(p.x - point.x, p.y - point.y) * t.scale <= 14);
     if (index >= 0) state.inputDrag = { type: "scale", index };
+    else if ($("imageMode").value === "hrtem" && pointInRect(point, state.roi)) {
+      state.inputDrag = { type: "roiMove", offset: { x: point.x - state.roi.x, y: point.y - state.roi.y } };
+    }
   }
   if (state.inputDrag) $("inputCanvas").setPointerCapture(event.pointerId);
 });
@@ -713,6 +767,9 @@ $("inputCanvas").addEventListener("pointermove", (event) => {
   if (state.inputDrag.type === "scale") {
     const key = state.inputDrag.index ? "b" : "a"; const other = state.inputDrag.index ? state.scaleLine.a : state.scaleLine.b;
     state.scaleLine[key] = { x: point.x, y: event.shiftKey ? other.y : point.y }; updateCalibrationFromScale();
+  } else if (state.inputDrag.type === "roiMove") {
+    state.roi = clampView({ x: point.x - state.inputDrag.offset.x, y: point.y - state.inputDrag.offset.y, width: state.roi.width, height: state.roi.height }, state.image, 8);
+    drawInputImage();
   } else {
     const square = state.inputDrag.type === "roi" && state.roiShape === "square";
     state.inputSelection = clampView(normalizedSelection(state.inputDrag.start, point, square), state.image, 1); drawInputImage();
@@ -723,6 +780,8 @@ $("inputCanvas").addEventListener("pointerup", () => {
     state.roi = state.inputSelection; toast(`FFT ROI：${Math.round(state.roi.width)} × ${Math.round(state.roi.height)} px`);
   } else if (state.inputDrag?.type === "zoom" && state.inputSelection?.width >= 8 && state.inputSelection?.height >= 8) {
     state.inputView = clampView(state.inputSelection, state.image); toast("已放大输入图局部区域");
+  } else if (state.inputDrag?.type === "roiMove") {
+    toast(`FFT ROI 已移动：${Math.round(state.roi.x)}, ${Math.round(state.roi.y)}`);
   }
   state.inputSelection = null; state.inputMode = null; state.inputDrag = null; drawInputImage();
 });
@@ -825,15 +884,21 @@ $("patternSharpness").addEventListener("input", (event) => { state.sharpness = N
 $("pdf2File").addEventListener("change", (event) => importDat(event.target.files[0]));
 $("phaseFiles").addEventListener("change", (event) => importPhaseFiles([...event.target.files]));
 $("searchCards").addEventListener("click", searchCards);
-$("elementLogic").addEventListener("change", updateElementUI);
+$("selectAllElements").addEventListener("click", () => {
+  for (const symbol of allElementSymbols) {
+    const current = state.elementStates.get(symbol) || "neutral";
+    state.elementStates.set(symbol, current === "neutral" ? "required" : current === "required" ? "optional" : "neutral");
+  }
+  updateElementUI(); toast("已对全部元素执行一次单击循环");
+});
 $("resultSort").addEventListener("change", () => renderResults());
 $("matchMode").addEventListener("change", () => {
   $("runMatch").textContent = $("matchMode").value === "ring" ? "开始环匹配" : "开始匹配";
   renderResults();
 });
 $("clearDatabase").addEventListener("click", async () => {
-  if (!confirm("确认清空 Sand3/database 中的全部卡片索引？原始 pdf2.dat 不会被删除。")) return;
-  await clearDatabase(); await refreshDatabaseStats(); toast("Sand3 持久数据库已清空");
+  if (!confirm("确认清空 Sand3-Industrial/database 中的全部卡片索引？原始 pdf2.dat 不会被删除。")) return;
+  await clearDatabase(); await refreshDatabaseStats(); toast("Sand3 Industrial 持久数据库已清空");
 });
 $("runMatch").addEventListener("click", runMatch); $("exportResults").addEventListener("click", exportCsv);
 window.addEventListener("resize", () => { drawInputImage(); drawPattern(); });

@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="HRTEM/SAED 三晶面晶相匹配工具">
-  <title>Sand3 · 晶相标定</title>
+  <meta name="description" content="Sand3 Industrial · HRTEM/SAED 三晶面晶相匹配工具">
+  <title>Sand3 Industrial · 晶相标定</title>
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./industrial.css">
 </head>
 <body>
   <header class="topbar">
     <div>
-      <p class="eyebrow">RECIPROCAL SPACE WORKBENCH</p>
-      <h1>Sand<span>3</span></h1>
+        <p class="eyebrow">TACTICAL RECIPROCAL SPACE WORKBENCH</p>
+        <h1>Sand<span>3</span></h1>
     </div>
     <div class="top-status"><span class="status-dot"></span><span id="globalStatus">准备就绪</span></div>
   </header>
@@ -20,10 +21,10 @@
     <section class="hero">
       <div>
         <p class="step-label">工作流</p>
-        <h2>从显微照片到可核查的晶相候选</h2>
+        <h2>衍射几何 / 晶相索引 / 本机数据库终端</h2>
       </div>
       <div class="workflow" aria-label="工作流程">
-        <span>01 图像</span><i></i><span>02 衍射点</span><i></i><span>03 元素</span><i></i><span>04 匹配</span>
+        <span>[01] 图像</span><i></i><span>[02] 衍射几何</span><i></i><span>[03] 元素先验</span><i></i><span>[04] 匹配输出</span>
       </div>
     </section>
 
@@ -43,7 +44,7 @@
 
         <div class="input-canvas-section hidden" id="inputCanvasSection">
           <div class="input-canvas-wrap" id="inputCanvasWrap">
-            <canvas id="inputCanvas" width="720" height="460"></canvas>
+            <canvas id="inputCanvas" width="720" height="690"></canvas>
             <button class="canvas-file-button" id="replaceImage" type="button">更换图片</button>
           </div>
           <div class="scale-editor">
@@ -53,7 +54,7 @@
             <button class="ghost" id="detectScale" type="button">自动识别标尺</button>
           </div>
           <div class="canvas-tools" id="inputCanvasTools">
-            <label>ROI 形状<select id="roiShape"><option value="rectangle">矩形</option><option value="square">正方形</option></select></label>
+            <label>ROI 形状<select id="roiShape"><option value="square" selected>正方形</option><option value="rectangle">矩形</option></select></label>
             <button class="ghost" id="selectRoi" type="button">框选 FFT ROI</button>
             <button class="ghost" id="zoomInput" type="button">框选局部放大</button>
             <button class="ghost" id="resetInputView" type="button">恢复原始尺寸</button>
@@ -88,15 +89,21 @@
           <div class="canvas-empty" id="canvasEmpty"><span>FFT / SAED</span><small>分析结果将在这里显示</small></div>
         </div>
         <div class="geometry-actions">
-          <button id="lockCenter" class="ghost" disabled>固定 000</button>
-          <button id="snapBright" class="ghost" disabled>亮点吸附：关</button>
-          <button id="findParallelogram" class="ghost" disabled>识别当前平行四边形</button>
-          <button id="pickPeaks" class="ghost" disabled>手动选 3 点</button>
-          <button id="clearParallelogram" class="ghost" disabled>删除平行四边形</button>
-          <button id="detectRings" class="ghost" disabled>识别 SAED 环</button>
-          <button id="ringEdit" class="ghost" disabled>环手动：关</button>
-          <button id="addRing" class="ghost" disabled>添加环</button>
-          <button id="deleteRing" class="ghost" disabled>删除环</button>
+          <div class="geometry-row">
+            <span class="geometry-label">单晶</span>
+            <button id="lockCenter" class="ghost" disabled>固定 000</button>
+            <button id="snapBright" class="ghost" disabled>亮点吸附：关</button>
+            <button id="findParallelogram" class="ghost" disabled>识别当前平行四边形</button>
+            <button id="pickPeaks" class="ghost" disabled>手动选 3 点</button>
+            <button id="clearParallelogram" class="ghost" disabled>删除平行四边形</button>
+          </div>
+          <div class="geometry-row">
+            <span class="geometry-label">多晶</span>
+            <button id="detectRings" class="ghost" disabled>识别 SAED 环</button>
+            <button id="ringEdit" class="ghost" disabled>环手动：关</button>
+            <button id="addRing" class="ghost" disabled>添加环</button>
+            <button id="deleteRing" class="ghost" disabled>删除环</button>
+          </div>
         </div>
         <div class="display-controls">
           <label>亮度 <input id="patternBrightness" type="range" min="-1" max="1" value="0" step="0.02"></label>
@@ -149,16 +156,16 @@
           </div>
         </div>
         <div class="progress hidden" id="importProgress"><div id="importProgressBar"></div></div>
-        <p class="hint" id="dbInfo">持久数据库：Sand3/database/sand3.sqlite；原始数据库保持只读。</p>
-        <button class="danger-link" id="clearDatabase">清空 Sand3 数据库</button>
+        <p class="hint" id="dbInfo">持久数据库：Sand3-Industrial/database/sand3.sqlite；原始数据库保持只读。</p>
+        <button class="danger-link" id="clearDatabase">清空 Sand3 Industrial 数据库</button>
       </article>
 
       <article class="panel elements-panel">
         <div class="panel-head">
           <div><p class="step-label">05 / 先验</p><h3>元素筛选</h3></div>
-          <div class="toolbar"><label>元素关系<select id="elementLogic"><option value="and">且（全部包含）</option><option value="or">或（任一包含）</option></select></label><label class="switch-label"><input id="onlyAllowed" type="checkbox"><span></span>仅允许所选元素</label><button class="primary" id="searchCards">Search</button></div>
+          <div class="toolbar"><button class="ghost" id="selectAllElements" type="button">单击所有元素</button><button class="primary" id="searchCards">Search</button></div>
         </div>
-        <p class="hint">单击：必须包含；再次单击：排除；第三次：取消。</p>
+        <p class="hint">单击：一定包含；再次单击：可能包含；第三次：恢复默认（不包含）。未选择元素默认不允许出现在卡片元素集合中。</p>
         <div class="element-grid" id="elementGrid"></div>
         <div class="element-summary" id="elementSummary">未设置元素限制</div>
         <div class="prior-results hidden" id="priorResults">
@@ -171,7 +178,7 @@
     <section class="panel results-panel">
       <div class="panel-head">
         <div><p class="step-label">06 / 结果</p><h3>匹配候选</h3></div>
-        <div class="toolbar"><label>匹配模式<select id="matchMode"><option value="three">三晶面 / 平行四边形</option><option value="ring">SAED 多晶环</option></select></label><label>结果排序<select id="resultSort"><option value="score-asc">综合评分低→高（最佳优先）</option><option value="score-desc">综合评分高→低</option></select></label><label class="switch-label"><input id="includeDeleted" type="checkbox"><span></span>包含 D 状态</label><button class="ghost" id="exportResults" disabled>导出 CSV</button><button class="primary" id="runMatch">开始匹配</button></div>
+        <div class="toolbar"><label>匹配模式<select id="matchMode"><option value="three">三晶面</option><option value="ring">SAED 多晶环</option></select></label><label>结果排序<select id="resultSort"><option value="score-asc">综合评分低→高（最佳优先）</option><option value="score-desc">综合评分高→低</option></select></label><label class="switch-label"><input id="includeDeleted" type="checkbox"><span></span>包含 D 状态</label><button class="ghost" id="exportResults" disabled>导出 CSV</button><button class="primary" id="runMatch">开始匹配</button></div>
       </div>
       <div class="result-summary" id="resultSummary">输入测量值并载入卡片库后开始匹配。</div>
       <div class="table-wrap">
@@ -183,7 +190,7 @@
     </section>
   </main>
 
-  <footer>Sand3 · 所有图像与晶体数据库均在本机处理</footer>
+  <footer>Sand3 Industrial · 所有图像与晶体数据库均在本机处理</footer>
   <div class="toast" id="toast" role="status"></div>
   <script type="module" src="./app.js"></script>
 </body>

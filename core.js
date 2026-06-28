@@ -885,11 +885,28 @@ export function elementsFromFormula(formula) {
   return [...new Set(elements)].sort();
 }
 
+function elementFilterKey(elements) {
+  return `|${[...new Set(elements || [])].sort().join("|")}|`;
+}
+
 export function phasePassesElementFilter(phaseElements, filter = {}) {
   const present = new Set(phaseElements || []);
   const required = filter.required || [];
+  const optional = filter.optional || [];
   const excluded = filter.excluded || [];
   const allowed = filter.allowed || [];
+  if (Array.isArray(filter.exactElementSets) && filter.exactElementSets.length) {
+    const accepted = new Set(filter.exactElementSets.map(elementFilterKey));
+    return accepted.has(elementFilterKey([...present]));
+  }
+  if (filter.onlySelectedElements) {
+    const permitted = new Set([...required, ...optional, ...allowed]);
+    if (!permitted.size) return true;
+    if (required.some((element) => !present.has(element))) return false;
+    if ([...present].some((element) => !permitted.has(element))) return false;
+    if (!required.length && optional.length && !optional.some((element) => present.has(element))) return false;
+    return true;
+  }
   if (filter.logic === "or" && required.length) {
     if (!required.some((element) => present.has(element))) return false;
   } else if (required.some((element) => !present.has(element))) return false;

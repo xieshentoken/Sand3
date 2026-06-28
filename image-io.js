@@ -100,6 +100,65 @@ async function deflateDecode(source) {
   throw new Error("Deflate TIFF 解压失败");
 }
 
+function jpegHasDecodeTables(jpeg) {
+  let index = jpeg[0] === 0xff && jpeg[1] === 0xd8 ? 2 : 0;
+  let hasQuantization = false; let hasHuffman = false;
+  while (index + 3 < jpeg.length) {
+    while (jpeg[index] === 0xff) index += 1;
+    const marker = jpeg[index++];
+    if (marker === 0xda || marker === 0xd9) break;
+    if (marker >= 0xd0 && marker <= 0xd8) continue;
+    if (index + 2 > jpeg.length) break;
+    const length = (jpeg[index] << 8) | jpeg[index + 1];
+    if (length < 2 || index + length > jpeg.length) break;
+    if (marker === 0xdb) hasQuantization = true;
+    if (marker === 0xc4) hasHuffman = true;
+    index += length;
+  }
+  return hasQuantization && hasHuffman;
+}
+
+export function mergeTiffJpegTables(strip, tables) {
+  const jpeg = strip instanceof Uint8Array ? strip : Uint8Array.from(strip || []);
+  const tableBytes = tables instanceof Uint8Array ? tables : Uint8Array.from(tables || []);
+  if (!tableBytes.length || jpegHasDecodeTables(jpeg)) return jpeg;
+  let tableStart = tableBytes[0] === 0xff && tableBytes[1] === 0xd8 ? 2 : 0;
+  let tableEnd = tableBytes.length;
+  if (tableEnd >= 2 && tableBytes[tableEnd - 2] === 0xff && tableBytes[tableEnd - 1] === 0xd9) tableEnd -= 2;
+  const tablePayload = tableBytes.subarray(tableStart, tableEnd);
+  const hasSoi = jpeg[0] === 0xff && jpeg[1] === 0xd8;
+  const imagePayload = hasSoi ? jpeg.subarray(2) : jpeg;
+  const hasEoi = imagePayload.length >= 2 && imagePayload[imagePayload.length - 2] === 0xff && imagePayload[imagePayload.length - 1] === 0xd9;
+  const merged = new Uint8Array(2 + tablePayload.length + imagePayload.length + (hasEoi ? 0 : 2));
+  merged.set([0xff, 0xd8], 0);
+  merged.set(tablePayload, 2);
+  merged.set(imagePayload, 2 + tablePayload.length);
+  if (!hasEoi) merged.set([0xff, 0xd9], merged.length - 2);
+  return merged;
+}
+
+export function tiffNeedsNativeRgbJpegDecode(buffer) {
+  const view = new DataView(buffer);
+  const byteOrder = String.fromCharCode(view.getUint8(0), view.getUint8(1));
+  if (byteOrder !== "II" && byteOrder !== "MM") return false;
+  const little = byteOrder === "II";
+  if (view.getUint16(2, little) !== 42) return false;
+  const ifdOffset = view.getUint32(4, little);
+  if (!ifdOffset || ifdOffset + 2 > view.byteLength) return false;
+  const entryCount = view.getUint16(ifdOffset, little);
+  const scalar = new Map(); let hasJpegTables = false;
+  for (let i = 0; i < entryCount; i += 1) {
+    const entry = ifdOffset + 2 + i * 12;
+    if (entry + 12 > view.byteLength) break;
+    const tag = view.getUint16(entry, little); const type = view.getUint16(entry + 2, little); const count = view.getUint32(entry + 4, little);
+    if (tag === 347 && count > 0) hasJpegTables = true;
+    if (count !== 1) continue;
+    if (type === 3) scalar.set(tag, view.getUint16(entry + 8, little));
+    else if (type === 4) scalar.set(tag, view.getUint32(entry + 8, little));
+  }
+  return scalar.get(259) === 7 && scalar.get(262) === 2 && scalar.get(277) === 3 && hasJpegTables;
+}
+
 function parseTiffDescriptionCalibration(description) {
   const text = String(description || "");
   const match = text.match(/(?:pixel(?:\s+size)?|physicalsize[xy]|scale)\s*[:=]\s*([0-9.eE+-]+)\s*(nm|pm|angstrom|å|a\b)/i);
@@ -116,12 +175,7 @@ async function decodeJpegTiffStrips(buffer, offsets, byteCounts, tags, width, he
   const gray = new Float64Array(width * height); let destinationY = 0;
   for (let i = 0; i < offsets.length; i += 1) {
     let jpeg = new Uint8Array(buffer, offsets[i], byteCounts[Math.min(i, byteCounts.length - 1)]);
-    if (tables?.length && !(jpeg[0] === 0xff && jpeg[1] === 0xd8)) {
-      const tableEnd = tables[tables.length - 2] === 0xff && tables[tables.length - 1] === 0xd9 ? tables.length - 2 : tables.length;
-      const merged = new Uint8Array(tableEnd + jpeg.length + 2); merged.set(tables.subarray(0, tableEnd)); merged.set(jpeg, tableEnd);
-      if (!(merged[merged.length - 2] === 0xff && merged[merged.length - 1] === 0xd9)) merged.set([0xff, 0xd9], merged.length - 2);
-      jpeg = merged;
-    }
+    if (tables?.length) jpeg = mergeTiffJpegTables(jpeg, tables);
     const bitmap = await createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }));
     const canvas = typeof OffscreenCanvas !== "undefined"
       ? new OffscreenCanvas(bitmap.width, bitmap.height)
@@ -234,7 +288,22 @@ export async function parseTiffBuffer(buffer, fileName = "image.tif") {
 }
 
 async function loadTiff(file) {
-  return parseTiffBuffer(await file.arrayBuffer(), file.name);
+  const buffer = await file.arrayBuffer();
+  if (tiffNeedsNativeRgbJpegDecode(buffer)) {
+    return decodeTiffWithNativeService(file);
+  }
+  return parseTiffBuffer(buffer, file.name);
+}
+
+async function decodeTiffWithNativeService(file) {
+  const response = await fetch(`/api/image/decode-tiff?name=${encodeURIComponent(file.name || "image.tif")}`, { method: "POST", body: file });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || "该 RGB JPEG-in-TIFF 需要系统 TIFF 解码器，但本机解码服务不可用");
+  }
+  const png = await response.blob();
+  const image = await loadNativeImage(new File([png], `${file.name || "image"}.png`, { type: "image/png" }));
+  return { ...image, format: "TIFF", metadata: { ...image.metadata, nativeDecoder: "macOS sips", sourceFormat: "RGB JPEG-in-TIFF" } };
 }
 
 const DM_TYPE_SIZE = { 2: 2, 3: 4, 4: 2, 5: 4, 6: 4, 7: 8, 8: 1, 9: 1, 10: 1, 11: 8, 12: 8 };

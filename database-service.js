@@ -28,6 +28,28 @@ function typedCopy(Type, blob) {
   return new Type(copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength));
 }
 
+function rawReflectionsFromArrays(dValues, hkls, intensities) {
+  const count = Math.min(dValues?.length || 0, Math.floor((hkls?.length || 0) / 3));
+  const rows = [];
+  for (let index = 0; index < count; index += 1) rows.push({
+    d: dValues[index],
+    intensity: intensities?.[index],
+    h: hkls[index * 3],
+    k: hkls[index * 3 + 1],
+    l: hkls[index * 3 + 2],
+    origin: "compact-cache",
+  });
+  return rows;
+}
+
+function rawReflectionJson(phase) {
+  return Array.isArray(phase.rawReflections) ? JSON.stringify(phase.rawReflections) : null;
+}
+
+function rawCardText(phase) {
+  return typeof phase.rawCardText === "string" && phase.rawCardText.length ? phase.rawCardText : null;
+}
+
 function compactReflections(phase) {
   if (phase.dValues && phase.hkls) {
     return {
@@ -47,7 +69,22 @@ function compactReflections(phase) {
 function elementKey(elements) { return `|${[...new Set(elements || [])].sort().join("|")}|`; }
 
 function addElementWhere(where, params, filter = {}) {
+  if (Array.isArray(filter.exactElementSets) && filter.exactElementSets.length) {
+    where.push(`elements IN (${filter.exactElementSets.map(() => "?").join(",")})`);
+    params.push(...filter.exactElementSets.map((elements) => elementKey(elements)));
+    return;
+  }
   const required = filter.required || [];
+  const optional = filter.optional || [];
+  if (filter.onlySelectedElements) {
+    for (const element of required) { where.push("elements LIKE ?"); params.push(`%|${element}|%`); }
+    if (!required.length && optional.length) {
+      where.push(`(${optional.map(() => "elements LIKE ?").join(" OR ")})`);
+      params.push(...optional.map((element) => `%|${element}|%`));
+    }
+    for (const excluded of filter.excluded || []) { where.push("elements NOT LIKE ?"); params.push(`%|${excluded}|%`); }
+    return;
+  }
   if (filter.logic === "or" && required.length) {
     where.push(`(${required.map(() => "elements LIKE ?").join(" OR ")})`);
     params.push(...required.map((element) => `%|${element}|%`));
@@ -62,11 +99,16 @@ function phaseFromRow(row, includeArrays = true) {
     sourceName: row.source_name, name: row.name, formula: row.formula,
     elements: (row.elements || "").split("|").filter(Boolean), spaceGroup: row.space_group,
     cell: json(row.cell_json, null), indexed: Boolean(row.indexed), dMin: row.d_min, dMax: row.d_max,
+    rawCardText: row.raw_card_text || "",
   };
   if (includeArrays) {
     phase.dValues = Array.from(typedCopy(Float32Array, row.d_values));
     phase.hkls = Array.from(typedCopy(Int16Array, row.hkls));
     phase.intensities = Array.from(typedCopy(Uint16Array, row.intensities));
+    const rawReflections = json(row.raw_reflections_json, null);
+    phase.rawReflections = Array.isArray(rawReflections)
+      ? rawReflections
+      : rawReflectionsFromArrays(phase.dValues, phase.hkls, phase.intensities);
   }
   return phase;
 }
@@ -82,7 +124,8 @@ export class CrystalDatabase {
         row_id INTEGER PRIMARY KEY, external_id TEXT NOT NULL UNIQUE, card_key TEXT, pdf_number TEXT,
         status TEXT, class_code TEXT, crystal_system TEXT, source_type TEXT, source_name TEXT,
         name TEXT, formula TEXT, elements TEXT, space_group TEXT, cell_json TEXT, indexed INTEGER,
-        d_min REAL, d_max REAL, d_values BLOB, hkls BLOB, intensities BLOB
+        d_min REAL, d_max REAL, d_values BLOB, hkls BLOB, intensities BLOB,
+        raw_reflections_json TEXT, raw_card_text TEXT
       );
       CREATE INDEX IF NOT EXISTS phases_filter ON phases(status, indexed, source_type);
       CREATE TABLE IF NOT EXISTS sources (
@@ -90,14 +133,21 @@ export class CrystalDatabase {
         imported_at INTEGER, cards INTEGER, indexed INTEGER, deleted INTEGER, kind TEXT
       );
     `);
+    this.migrate();
     this.insertPhase = this.db.prepare(`INSERT OR REPLACE INTO phases
-      (external_id,card_key,pdf_number,status,class_code,crystal_system,source_type,source_name,name,formula,elements,space_group,cell_json,indexed,d_min,d_max,d_values,hkls,intensities)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      (external_id,card_key,pdf_number,status,class_code,crystal_system,source_type,source_name,name,formula,elements,space_group,cell_json,indexed,d_min,d_max,d_values,hkls,intensities,raw_reflections_json,raw_card_text)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     this.insertSource = this.db.prepare(`INSERT OR REPLACE INTO sources
       (fingerprint,name,size,last_modified,imported_at,cards,indexed,deleted,kind) VALUES (?,?,?,?,?,?,?,?,?)`);
   }
 
   close() { this.db.close(); }
+
+  migrate() {
+    const columns = new Set(this.db.prepare("PRAGMA table_info(phases)").all().map((row) => row.name));
+    if (!columns.has("raw_reflections_json")) this.db.exec("ALTER TABLE phases ADD COLUMN raw_reflections_json TEXT");
+    if (!columns.has("raw_card_text")) this.db.exec("ALTER TABLE phases ADD COLUMN raw_card_text TEXT");
+  }
 
   putPhase(phase) {
     const compact = compactReflections(phase);
@@ -106,7 +156,7 @@ export class CrystalDatabase {
       phase.crystalSystem || "Unknown", phase.sourceType || "", phase.sourceName || "", phase.name || "",
       phase.formula || "", elementKey(phase.elements), phase.spaceGroup || "", JSON.stringify(phase.cell || null),
       phase.indexed ? 1 : 0, phase.dMin ?? null, phase.dMax ?? null,
-      floatBlob(compact.dValues), int16Blob(compact.hkls), uint16Blob(compact.intensities),
+      floatBlob(compact.dValues), int16Blob(compact.hkls), uint16Blob(compact.intensities), rawReflectionJson(phase), rawCardText(phase),
     );
   }
 
@@ -132,6 +182,11 @@ export class CrystalDatabase {
     }));
     let bytes = 0; try { bytes = statSync(this.filePath).size; } catch {}
     return { phases, sources, path: this.filePath, bytes };
+  }
+
+  hasRawPdf2Records() {
+    const row = this.db.prepare("SELECT count(*) n FROM phases WHERE source_type='PDF2.DAT' AND raw_card_text IS NOT NULL AND raw_card_text<>''").get();
+    return Number(row.n) > 0;
   }
 
   query(query = {}) {
@@ -182,6 +237,13 @@ export class CrystalDatabase {
     })).filter((phase) => phasePassesElementFilter(phase.elements, filter));
   }
 
+  getPhase(identifier) {
+    const id = String(identifier || "").trim();
+    if (!id) return null;
+    const row = this.db.prepare("SELECT * FROM phases WHERE external_id=? OR pdf_number=? LIMIT 1").get(id, id);
+    return row ? phaseFromRow(row) : null;
+  }
+
   clear() {
     this.db.exec("BEGIN IMMEDIATE; DELETE FROM phases; DELETE FROM sources; COMMIT; VACUUM;");
   }
@@ -211,13 +273,15 @@ class Pdf2ImportSession {
     const data = record.slice(0, 71); const tag = record.slice(71, 80); const code = tag[8];
     if (!/^[A-Z][0-9]{6}[A-Z0-9][A-Z0-9+*]$/.test(tag)) throw new Error(`无效 PDF2 记录标记：${tag}`);
     if (code === "1") {
+      this.flushCard();
       const cardKey = tag.slice(0, 8);
       this.current = { id: `pdf2:${cardKey}`, cardKey, pdfNumber: `${tag.slice(1, 3)}-${tag.slice(3, 7)}`, status: tag[0],
         classCode: tag[7], sourceType: "PDF2.DAT", sourceName: this.source.name,
-        nameParts: [], formulaParts: [], cell: null, d: [], hkl: [], intensity: [] };
+        nameParts: [], formulaParts: [], cell: null, d: [], hkl: [], intensity: [], rawRecords: [record] };
       return;
     }
     if (!this.current) return;
+    this.current.rawRecords.push(record);
     if (code === "2" && !this.current.spaceGroup) this.current.spaceGroup = data.slice(0, 12).trim();
     else if (code === "5") this.current.nameParts.push(data.slice(0, 65).trim());
     else if (code === "7") this.current.formulaParts.push(data.slice(0, 65).trim());
@@ -241,8 +305,9 @@ class Pdf2ImportSession {
     const phase = { ...card, name: card.nameParts.join(" ").trim(), formula, elements: elementsFromFormula(formula),
       crystalSystem: CRYSTAL_SYSTEM_BY_CODE[card.classCode] || "Unknown", spaceGroup: "", indexed,
       dMin: card.d.length ? Math.min(...card.d) : null, dMax: card.d.length ? Math.max(...card.d) : null,
-      dValues: Float32Array.from(card.d), hkls: Int16Array.from(card.hkl), intensities: Uint16Array.from(card.intensity) };
-    delete phase.nameParts; delete phase.formulaParts; delete phase.d; delete phase.hkl; delete phase.intensity;
+      dValues: Float32Array.from(card.d), hkls: Int16Array.from(card.hkl), intensities: Uint16Array.from(card.intensity),
+      rawCardText: card.rawRecords.join("\n") };
+    delete phase.nameParts; delete phase.formulaParts; delete phase.d; delete phase.hkl; delete phase.intensity; delete phase.rawRecords;
     this.service.putPhase(phase); this.cards += 1; if (indexed) this.indexed += 1; if (card.status === "D") this.deleted += 1;
     this.current = null;
   }

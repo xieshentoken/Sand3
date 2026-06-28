@@ -1,0 +1,490 @@
+/*
+  Sand3 Industrial theme.
+  Scope: outer application chrome only. The input/FFT/SAED canvases are kept
+  clean: no scanline, noise, blur, or decorative overlay is applied to canvas
+  pixels so microscopy data remains readable.
+*/
+
+:root {
+  --ink: #e8e8e2;
+  --muted: #9a9a8f;
+  --paper: #0b0b0b;
+  --panel: #111111;
+  --line: #3a3a35;
+  --accent: #7567ff;
+  --accent-strong: #a18cff;
+  --accent-dark: #211b4d;
+  --teal: var(--accent);
+  --teal-dark: var(--accent-strong);
+  --cyan: #b9c0ff;
+  --amber: var(--accent);
+  --red: var(--accent);
+  --shadow: none;
+  --phosphor: #b9c0ff;
+  --metal: #1a1a18;
+  --metal-2: #161614;
+  --paper-edge: #4b4b43;
+}
+
+* {
+  border-radius: 0 !important;
+}
+
+body {
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(255,255,255,.025) 1px, transparent 1px),
+    #0b0b0b;
+  background-size: 28px 28px;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+button,
+input,
+select,
+.mono,
+.workflow,
+.eyebrow,
+.step-label,
+.top-status,
+.badge,
+.hint,
+.muted,
+.scale-status,
+.element-summary,
+table {
+  font-family: "SFMono-Regular", "JetBrains Mono", "IBM Plex Mono", Consolas, "PingFang SC", monospace;
+}
+
+.topbar {
+  height: 94px;
+  background: #101010;
+  border-bottom: 2px solid var(--red);
+  box-shadow: none;
+}
+
+.topbar h1 {
+  margin-top: -6px;
+  font-family: Impact, "Arial Black", Inter, sans-serif;
+  font-size: clamp(38px, 5vw, 76px);
+  line-height: .82;
+  letter-spacing: -.06em;
+  text-transform: uppercase;
+}
+
+.topbar h1 span {
+  color: var(--red);
+}
+
+.status-dot {
+  background: var(--phosphor);
+  box-shadow: 0 0 0 3px rgba(117,103,255,.18);
+}
+
+.eyebrow,
+.step-label {
+  color: var(--red);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+}
+
+main {
+  width: min(1640px, calc(100% - 28px));
+}
+
+.hero {
+  border-left: 2px solid var(--red);
+  border-right: 1px solid var(--paper-edge);
+  padding: 26px 18px 20px;
+  margin: 20px 0 18px;
+  background: rgba(17,17,17,.88);
+}
+
+.hero h2 {
+  color: #f1f1ea;
+  font-family: Impact, "Arial Black", Inter, sans-serif;
+  font-size: clamp(28px, 4vw, 58px);
+  line-height: .92;
+  letter-spacing: -.045em;
+  text-transform: uppercase;
+}
+
+.workflow {
+  color: #d6d6ce;
+  letter-spacing: .08em;
+}
+
+.workflow i {
+  height: 2px;
+  background: var(--red);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--paper-edge);
+  box-shadow: none;
+  overflow: visible;
+}
+
+.panel-head {
+  border-bottom: 1px solid var(--line);
+  margin: -4px -4px 18px;
+  padding: 0 0 14px;
+}
+
+.panel h3 {
+  color: #f2f2ec;
+  font-family: Impact, "Arial Black", Inter, sans-serif;
+  font-size: 24px;
+  line-height: .95;
+  letter-spacing: -.03em;
+  text-transform: uppercase;
+}
+
+.badge {
+  color: #d8d8d0;
+  background: #171715;
+  border: 1px solid var(--paper-edge);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.badge.active {
+  color: var(--phosphor);
+  background: #111126;
+  border-color: rgba(117,103,255,.65);
+}
+
+.drop-zone,
+.source-card,
+.prior-list,
+.prior-card,
+.result-summary,
+.uncertainty-readout {
+  background: var(--metal-2);
+  border: 1px solid var(--paper-edge);
+}
+
+.drop-zone {
+  min-height: 126px;
+  border-style: solid;
+}
+
+.drop-zone.drag {
+  border-color: var(--red);
+  background: #151329;
+}
+
+.drop-icon {
+  color: var(--red);
+}
+
+.input-canvas-wrap,
+.canvas-wrap {
+  background: #050505;
+  border: 1px solid #55554c;
+  overflow: hidden;
+}
+
+.input-canvas-wrap canvas,
+.canvas-wrap canvas {
+  background: #050505;
+}
+
+.canvas-empty {
+  color: #8f8f86;
+  background: #090909;
+  border: 1px dashed #4b4b43;
+}
+
+.canvas-empty span {
+  font-family: Impact, "Arial Black", Inter, sans-serif;
+  color: #d8d8cf;
+  letter-spacing: -.03em;
+}
+
+.canvas-file-button {
+  color: #f2f2ec;
+  background: #111;
+  border: 1px solid var(--red);
+}
+
+.scale-editor,
+.canvas-tools,
+.geometry-actions,
+.display-controls,
+.toolbar {
+  gap: 7px;
+}
+
+label {
+  color: #b5b5aa;
+  letter-spacing: .05em;
+}
+
+input[type=number],
+select,
+input[type=range] {
+  color: #f1f1ea;
+  background: #0d0d0c;
+  border: 1px solid #55554c;
+  accent-color: var(--red);
+}
+
+input[type=number]:focus,
+select:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px rgba(117,103,255,.24);
+}
+
+button,
+.file-button {
+  background: #161614;
+  color: #f0f0e8;
+  border: 1px solid #5b5b52;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  box-shadow: none;
+}
+
+button:hover,
+.file-button:hover {
+  border-color: var(--red);
+  color: white;
+}
+
+.primary {
+  color: #fff;
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.primary:hover {
+  background: var(--accent-strong);
+}
+
+.ghost,
+.file-button {
+  color: #e0e0d8;
+  background: #111110;
+}
+
+.ghost.active {
+  color: #fff;
+  background: var(--red);
+  border-color: var(--red);
+}
+
+button:disabled {
+  opacity: .35;
+}
+
+.danger-link {
+  color: var(--red);
+  background: transparent;
+  border: 0;
+}
+
+.hint,
+.muted,
+.drop-zone small,
+.source-card small,
+.prior-card small,
+.prior-card p,
+.phase-formula {
+  color: var(--muted);
+}
+
+.scale-status,
+.uncertainty-readout,
+.result-summary {
+  color: #d0d0c7;
+}
+
+.uncertainty-readout {
+  border-left: 3px solid var(--red);
+}
+
+.measurement-grid input {
+  color: var(--phosphor);
+  background: #0f1024;
+  border-color: rgba(117,103,255,.55);
+}
+
+.equation {
+  color: var(--red);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-style: normal;
+}
+
+.element {
+  color: #d8d8cf;
+  background: #141412;
+  border: 1px solid #44443e;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.element.required {
+  color: #fff;
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.element.optional {
+  color: #fff;
+  background: #252145;
+  border-color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px rgba(161,140,255,.35);
+}
+
+.element.excluded {
+  color: #111;
+  background: #d8d8cf;
+  border-color: #d8d8cf;
+}
+
+.element-summary {
+  background: #10100f;
+  border: 1px solid var(--paper-edge);
+  padding: 9px 10px;
+}
+
+.prior-card:hover,
+tbody tr:hover {
+  background: #1b1b18;
+}
+
+#resultsBody tr {
+  cursor: zoom-in;
+}
+
+table {
+  color: #e8e8e2;
+}
+
+th {
+  color: #f3f3ec;
+  background: #171715;
+  border-bottom: 2px solid var(--red);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+td {
+  border-bottom: 1px solid #33332f;
+}
+
+.phase-name {
+  color: #fff;
+}
+
+.status-pill {
+  color: #fff;
+  background: var(--accent-dark);
+  border: 1px solid var(--red);
+}
+
+.score {
+  color: var(--phosphor);
+}
+
+.progress {
+  background: #1e1e1b;
+  border: 1px solid var(--paper-edge);
+}
+
+.progress div {
+  background: var(--red);
+}
+
+.switch-label span {
+  background: #4a4a43;
+}
+
+.switch-label input:checked + span {
+  background: var(--red);
+}
+
+.legend {
+  color: #b8b8af;
+  letter-spacing: .04em;
+}
+
+.dot.amber,
+.dot.cyan {
+  background: var(--red);
+}
+
+footer {
+  color: #77776f;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.toast {
+  color: #fff;
+  background: #151512;
+  border: 1px solid var(--red);
+  box-shadow: none;
+}
+
+.toast.error {
+  background: #1e193c;
+}
+
+.card-grid {
+  grid-template-columns: minmax(320px, .95fr) minmax(460px, 1.15fr);
+}
+
+.card-hero h2 {
+  word-break: break-word;
+}
+
+.card-dl {
+  display: grid;
+  grid-template-columns: minmax(120px, .34fr) minmax(0, 1fr);
+  gap: 1px;
+  margin: 0;
+  background: var(--paper-edge);
+  border: 1px solid var(--paper-edge);
+}
+
+.card-dl dt,
+.card-dl dd {
+  min-height: 36px;
+  margin: 0;
+  padding: 10px 12px;
+  background: #10100f;
+  overflow-wrap: anywhere;
+}
+
+.card-dl dt {
+  color: #b7b7ad;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.card-dl dd {
+  color: #f0f0e8;
+  font-family: "SFMono-Regular", Consolas, "PingFang SC", monospace;
+  font-size: 12px;
+}
+
+.card-table-wrap {
+  max-height: 70vh;
+}
+
+.raw-record-cell {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.card-detail-page .hero {
+  align-items: start;
+}

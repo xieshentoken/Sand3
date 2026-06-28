@@ -90,6 +90,7 @@ export function parseCif(text, fileName = "phase.cif", options = {}) {
     dMin: options.dMin ?? 0.5,
     dMax: options.dMax ?? 50,
   });
+  const rawReflections = reflections.map((reflection) => ({ ...reflection, origin: reflection.origin || "cif_generated" }));
   return {
     id: `cif:${fileName}:${block}`,
     cardKey: block,
@@ -105,6 +106,8 @@ export function parseCif(text, fileName = "phase.cif", options = {}) {
     spaceGroup,
     cell,
     reflections,
+    rawReflections,
+    rawCardText: text,
     indexed: true,
     dMin: reflections.at(-1)?.d ?? null,
     dMax: reflections[0]?.d ?? null,
@@ -125,7 +128,7 @@ export function parseJadeTxt(text, fileName = "card.txt") {
     const values = line.replace(/[()]/g, " ").trim().split(/\s+/);
     if (values.length < columns.length - 2) continue;
     const d = Number(values[dIndex]); const h = Number(values[hIndex]); const k = Number(values[kIndex]); const l = Number(values[lIndex]);
-    if ([d, h, k, l].every(Number.isFinite)) reflections.push({ d, h, k, l, intensity: null, origin: "jade_txt" });
+    if ([d, h, k, l].every(Number.isFinite)) reflections.push({ d, h, k, l, intensity: null, origin: "jade_txt", raw: line.trim() });
   }
   const cellText = text.match(/^\s*Cell\s*=\s*(.*?)(?:\s+Pearson\s*=|\r?$)/im)?.[1] || "";
   const cellValues = (cellText.match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
@@ -146,5 +149,7 @@ export function parseJadeTxt(text, fileName = "card.txt") {
     pdfNumber,
     status: "TXT", classCode: Object.entries(CRYSTAL_SYSTEM_BY_CODE).find(([, value]) => value === crystalSystem)?.[0] || "X", crystalSystem, sourceType: "Jade TXT", sourceName: fileName,
     name: lines[1]?.trim() || fileName, formula, elements: elementsFromFormula(formula), cell, reflections, indexed: true,
+    rawReflections: reflections.map((reflection) => ({ ...reflection })),
+    rawCardText: text,
   };
 }
