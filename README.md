@@ -1,6 +1,6 @@
-# Sand3 Industrial
+# Sand3
 
-Sand3 Industrial 是 Sand3 的独立工业风界面副本。它使用 Tactical Telemetry / Industrial Brutalist 外层 UI，但保留 Sand3 的 HRTEM / SAED 三晶面晶相匹配、PDF2/CIF/TXT 数据源、SAED 环匹配和全部原始交互功能。核心判据保持为：
+Sand3是一个本机Web应用, 使用浏览器界面与Node/SQLite持久数据库完成HRTEM/SAED的晶相匹配查找。它使用 Tactical Telemetry / Industrial Brutalist 外层 UI、PDF2/CIF/TXT 数据源、SAED 环匹配和全部原始交互功能。核心判据保持为：
 
 ```text
 g1 + g3 = g2
@@ -13,7 +13,7 @@ g1 + g3 = g2
 需要 Node.js 22.5 或更高版本（使用内置 `node:sqlite`），不需要安装第三方依赖。
 
 ```bash
-cd "/Users/a0000/Documents/Py tools/Sand3-Industrial"
+cd "~/Sand3"
 npm start
 ```
 
@@ -46,7 +46,7 @@ npm test
 
 ## 使用注意
 
-- 数据库固定保存于 `/Users/a0000/Documents/Py tools/Sand3-Industrial/database/sand3.sqlite`；运行时可能同时出现 `-wal`、`-shm` 临时文件。
+- 数据库固定保存于 `Sand3/database/sand3.sqlite`；运行时可能同时出现 `-wal`、`-shm` 临时文件。
 - 界面的“清空 Sand3 Industrial 数据库”会清除 SQLite 索引及旧版浏览器 IndexedDB，不会删除原始 `pdf2.dat`。
 
 - HRTEM 模式填写实空间 `Å/pixel`；程序 FFT 后自动换算倒易标定。
