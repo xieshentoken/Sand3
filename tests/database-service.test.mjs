@@ -21,16 +21,35 @@ try {
   const imported = session.finish();
   assert.equal(imported.cards, 1); assert.equal(imported.indexed, 1);
   assert.equal(database.stats().phases, 1);
+  const phase = database.getPhase("pdf2:P000001C");
+  assert.equal(phase.pdfNumber, "00-0001");
+  assert.equal(phase.dValues.length, 1);
+  assert.equal(phase.hkls.length, 3);
+  assert.ok(phase.rawCardText.includes("Synthetic phase"));
+  assert.equal(phase.rawCardText.split("\n").length, 6);
+  assert.equal(phase.rawReflections.length, 1);
+  assert.equal(database.hasRawPdf2Records(), true);
   assert.equal(database.query({ statuses: ["P"], indexedOnly: true, observedD: [2], dTolerances: [0.01], elementFilter: { required: ["Fe"], excluded: [] } }).length, 1);
   assert.equal(database.query({ statuses: ["P"], indexedOnly: true, observedD: [2, 9], dTolerances: [0.01, 0.01] }).length, 0);
   assert.equal(database.query({ statuses: ["P"], indexedOnly: true, observedD: [2, 9], dTolerances: [0.01, 0.01], minObservedMatches: 1 }).length, 1);
   assert.equal(database.searchSummaries({ required: ["Fe"], excluded: [], statuses: ["P"] }).length, 1);
   assert.equal(database.searchSummaries({ required: ["H", "Fe"], logic: "and", statuses: ["P"] }).length, 0);
   assert.equal(database.searchSummaries({ required: ["H", "Fe"], logic: "or", statuses: ["P"] }).length, 1);
+  const smallCell = { a: 4, b: 4, c: 4, alpha: 90, beta: 90, gamma: 90 };
+  const smallReflection = [{ d: 2, h: 1, k: 0, l: 0 }];
+  database.savePhases([
+    { id: "phase:li", status: "P", name: "Li", formula: "Li", elements: ["Li"], indexed: true, cell: smallCell, reflections: smallReflection },
+    { id: "phase:li-o", status: "P", name: "Li O", formula: "Li O", elements: ["Li", "O"], indexed: true, cell: smallCell, reflections: smallReflection },
+    { id: "phase:li-s", status: "P", name: "Li S", formula: "Li S", elements: ["Li", "S"], indexed: true, cell: smallCell, reflections: smallReflection },
+    { id: "phase:li-o-s", status: "P", name: "Li O S", formula: "Li O S", elements: ["Li", "O", "S"], indexed: true, cell: smallCell, reflections: smallReflection },
+    { id: "phase:li-o-fe", status: "P", name: "Li O Fe", formula: "Li O Fe", elements: ["Li", "O", "Fe"], indexed: true, cell: smallCell, reflections: smallReflection },
+  ]);
+  const exact = database.searchSummaries({ statuses: ["P"], exactElementSets: [["Li"], ["Li", "O"], ["Li", "S"], ["Li", "O", "S"]] }, 20).map((phase) => phase.id).sort();
+  assert.deepEqual(exact, ["phase:li", "phase:li-o", "phase:li-o-s", "phase:li-s"]);
   database.close();
 
   database = new CrystalDatabase(path);
-  assert.equal(database.stats().phases, 1, "SQLite index should survive service restart");
+  assert.equal(database.stats().phases, 6, "SQLite index should survive service restart");
   database.clear(); assert.equal(database.stats().phases, 0); database.close();
   console.log("database service tests passed");
 } finally { rmSync(directory, { recursive: true, force: true }); }

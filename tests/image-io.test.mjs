@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { parseDm3Buffer, parseTiffBuffer } from "../image-io.js";
+import { mergeTiffJpegTables, parseDm3Buffer, parseTiffBuffer, tiffNeedsNativeRgbJpegDecode } from "../image-io.js";
 
 function arrayBufferOf(buffer) {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
@@ -9,8 +9,18 @@ function arrayBufferOf(buffer) {
 
 const tiffPath = fileURLToPath(new URL("../../test data sand/Image_32.tif", import.meta.url));
 if (existsSync(tiffPath)) {
+  const image32 = readFileSync(tiffPath);
+  assert.equal(tiffNeedsNativeRgbJpegDecode(arrayBufferOf(image32)), true);
+  const strip = image32.subarray(409, 409 + 6784589);
+  const tables = image32.subarray(120, 120 + 289);
+  const repairedJpeg = mergeTiffJpegTables(strip, tables);
+  const hasMarker = (bytes, marker) => bytes.some((byte, index) => byte === 0xff && bytes[index + 1] === marker);
+  assert.deepEqual([...repairedJpeg.slice(0, 4)], [0xff, 0xd8, 0xff, 0xdb]);
+  assert.ok(hasMarker(repairedJpeg, 0xc4), "repaired JPEG should include Huffman tables from TIFF JPEGTables");
+  assert.ok(hasMarker(repairedJpeg, 0xc0), "repaired JPEG should include the original strip SOF marker");
+  assert.deepEqual([...repairedJpeg.slice(-2)], [0xff, 0xd9]);
   await assert.rejects(
-    parseTiffBuffer(arrayBufferOf(readFileSync(tiffPath)), "Image_32.tif"),
+    parseTiffBuffer(arrayBufferOf(image32), "Image_32.tif"),
     /JPEG 压缩 TIFF 需要浏览器图像解码器/,
   );
 }
